@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "ubc-ocean"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{include = "ubc_ocean"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "^2.1.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
