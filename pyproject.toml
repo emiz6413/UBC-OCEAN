@@ -7,8 +7,9 @@ readme = "README.md"
 packages = [{include = "ubc_ocean"}]
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.11,<3.13"
 torch = "^2.1.0"
+numpy = "^1.26.1"
 
 
 [build-system]
