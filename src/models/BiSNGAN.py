@@ -5,6 +5,7 @@ import torch
 from torch import nn, optim
 from torch.nn.utils.parametrizations import spectral_norm
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 
 class EncoderBlock(nn.Module):
@@ -184,13 +185,20 @@ class BiSNGAN(nn.Module):
         d_loss = -eg_loss + lamb * self.calc_grad_penalty(x.detach(), z_hat.detach(), x_tilde.detach(), z.detach())
         return d_loss, eg_loss
 
-    def train(self, train_loader: DataLoader) -> "BiSNGAN":
-        # ge_loss = 0
-        # d_loss = 0
+    def train(self, train_loader: DataLoader) -> tuple[float, float]:
+        ge_loss = 0
+        d_loss = 0
+        pbar = tqdm(total=len(train_loader))
         for idx, (x, _) in enumerate(train_loader, 1):
-            _ge_loss, d_loss = self.train_step(x)
+            _ge_loss, _d_loss = self.train_step(x)
+            pbar.set_description(
+                f"Generator/Encoder loss: {_ge_loss.item():.3f}. Discriminator loss: {_d_loss.item():.3f}"
+            )
+            pbar.update()
+            ge_loss += _ge_loss.item()
+            d_loss += _d_loss.item()
 
-        return self
+        return ge_loss / len(train_loader), d_loss / len(train_loader)
 
     def train_step(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         y_true = torch.ones((x.size(0), 1), device=x.device)
@@ -219,4 +227,4 @@ class BiSNGAN(nn.Module):
         ge_loss.backward(retain_graph=True)
         self.eg_optimizer.step()
 
-        return d_loss.item(), ge_loss.item()
+        return d_loss, ge_loss
