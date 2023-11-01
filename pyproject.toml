@@ -10,7 +10,13 @@ packages = [{include = "ubc_ocean"}]
 python = ">=3.11,<3.13"
 torch = "^2.1.0"
 numpy = "^1.26.1"
+tqdm = "^4.66.1"
 
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
+notebook = "^7.0.6"
+torchvision = "^0.16.0"
 
 [build-system]
 requires = ["poetry-core"]
