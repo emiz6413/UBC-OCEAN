@@ -1,7 +1,10 @@
+from itertools import chain
 from typing import ClassVar
 
 import torch
-from torch import nn
+from torch import nn, optim
+from torch.nn.utils.parametrizations import spectral_norm
+from torch.utils.data import DataLoader
 
 
 class EncoderBlock(nn.Module):
@@ -50,17 +53,17 @@ class GeneratorBlock(nn.Module):
         return x
 
 
-class DiscriminatorBlock(nn.Module):
+class SNDiscriminatorBlock(nn.Module):
     leak: ClassVar[int] = 0.2
 
     def __init__(
         self, in_channels: int, out_channels: int, kernel_size: int = 4, stride: int = 1, padding: int = 0
     ) -> None:
         super().__init__()
-        self.conv = nn.Conv2d(
-            in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True
+        self.conv = spectral_norm(
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True)
         )
-        self.activation = nn.LeakyReLU(negative_slope=self.leak, inplace=True)
+        self.activation = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
@@ -81,6 +84,7 @@ class Encoder(nn.Module):
             EncoderBlock(dim, dim, kernel_size=4, stride=1, padding=0),
             nn.Conv2d(dim, latent_dim, kernel_size=1),
         )
+        self.latent_dim = latent_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.downs(x)
@@ -97,6 +101,7 @@ class Generator(nn.Module):
             nn.ConvTranspose2d(dim, output_channels, kernel_size=4, stride=2, padding=1, bias=False),
             nn.Tanh(),
         )
+        self.latent_dim = latent_dim
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.ups(x)
@@ -104,38 +109,54 @@ class Generator(nn.Module):
 
 class Discriminator(nn.Module):
     def __init__(self, input_channels: int, latent_dim: int = 128, dim: int = 128) -> None:
+        self.latent_dim = latent_dim
         self.x_mapping = nn.Sequential(
             *[
-                DiscriminatorBlock(dim if i else input_channels, dim, kernel_size=4, stride=2, padding=1)
+                SNDiscriminatorBlock(dim if i else input_channels, dim, kernel_size=4, stride=2, padding=1)
                 for i in range(3)
             ],
-            DiscriminatorBlock(dim, dim, kernel_size=4),
+            SNDiscriminatorBlock(dim, dim, kernel_size=4),
         )
 
         self.z_mapping = nn.Sequential(
-            DiscriminatorBlock(latent_dim, dim, kernel_size=1), DiscriminatorBlock(dim, dim, kernel_size=1)
+            SNDiscriminatorBlock(latent_dim, dim, kernel_size=1), SNDiscriminatorBlock(dim, dim, kernel_size=1)
         )
 
         self.join_mapping = nn.Sequential(
-            DiscriminatorBlock(dim * 2, dim * 2, kernel_size=1),
-            DiscriminatorBlock(dim * 2, dim * 2, kernel_size=1),
+            SNDiscriminatorBlock(dim * 2, dim * 2, kernel_size=1),
+            SNDiscriminatorBlock(dim * 2, dim * 2, kernel_size=1),
             nn.Conv2d(dim * 2, 1, kernel_size=1),
         )
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         x = self.x_mapping(x)
         z = self.z_mapping(z)
         joint = torch.cat((x, z), dim=1)
         joint = self.join_mapping(joint)
-        return joint
+        return self.sigmoid(joint)
 
 
-class BiGAN(nn.Module):
+class BiSNGAN(nn.Module):
     def __init__(self, encoder: Encoder, generator: Generator, discriminator: Discriminator) -> None:
         super().__init__()
         self.encoder = encoder
         self.generator = generator
         self.discriminator = discriminator
+        self.latent_dim = self.encoder.latent_dim
+        self.criterion = nn.BCELoss()
+        self.eg_optimizer = self.create_eg_optimizer()
+        self.d_optimizer = self.create_d_optimizer()
+
+    def create_eg_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+        self.eg_optimizer = optim.Adam(
+            chain(self.encoder.parameters(), self.generator.parameters()), lr=lr, betas=betas
+        )
+        return self.eg_optimizer
+
+    def create_d_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+        self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=lr, betas=betas)
+        return self.d_optimizer
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         return self.encoder(x)
@@ -145,3 +166,57 @@ class BiGAN(nn.Module):
 
     def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
         return self.generate(self.encode(x))
+
+    def discriminate(
+        self, x: torch.Tensor, z_hat: torch.Tensor, x_tilde: torch.Tensor, z: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = torch.cat([x, x_tilde], dim=0)
+        z = torch.cat([z_hat, z], dim=0)
+        output = self.discriminator(x, z)
+        data_preds, sample_preds = torch.split(output, 2, dim=0)
+        return data_preds, sample_preds
+
+    def forward(self, x: torch.Tensor, z: torch.Tensor, lamb: float = 10.0) -> tuple[torch.Tensor, torch.Tensor]:
+        z_hat = self.encode(x)
+        x_tilde = self.generate(z)
+        data_preds, sample_preds = self.discriminate(x, z_hat, x_tilde, z)
+        eg_loss = torch.mean(data_preds - sample_preds)
+        d_loss = -eg_loss + lamb * self.calc_grad_penalty(x.detach(), z_hat.detach(), x_tilde.detach(), z.detach())
+        return d_loss, eg_loss
+
+    def train(self, train_loader: DataLoader) -> "BiSNGAN":
+        # ge_loss = 0
+        # d_loss = 0
+        for idx, (x, _) in enumerate(train_loader, 1):
+            _ge_loss, d_loss = self.train_step(x)
+
+        return self
+
+    def train_step(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        y_true = torch.ones((x.size(0), 1), device=x.device)
+        y_fake = torch.zeros_like(y_true)
+
+        self.d_optimizer.zero_grad()
+        self.eg_optimizer.zero_grad()
+
+        # generator
+        z_fake = torch.randn(x.size(0), self.latent_dim, 1, 1, device=x.device)
+        x_fake = self.generate(z_fake)
+
+        # encoder
+        z_true = self.encode(x)
+
+        # discriminator
+        real_preds, fake_preds = self.discriminate(x, z_true, x_fake, z_fake)
+
+        d_loss: torch.Tensor = self.criterion(real_preds, y_true) + self.criterion(fake_preds, y_fake)
+        ge_loss: torch.Tensor = self.criterion(fake_preds, y_true) + self.criterion(real_preds, y_fake)
+
+        # back-prop
+        d_loss.backward(retain_graph=True)
+        self.d_optimizer.step()
+
+        ge_loss.backward(retain_graph=True)
+        self.eg_optimizer.step()
+
+        return d_loss.item(), ge_loss.item()
