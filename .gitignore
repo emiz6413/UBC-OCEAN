@@ -153,4 +153,5 @@ dmypy.json
 cython_debug/
 
 # data
-/dataset
+dataset/
+notebooks/dataset/
