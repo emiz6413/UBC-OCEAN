@@ -195,9 +195,8 @@ class BiSNGAN(nn.Module):
         ge_loss = 0.0
         d_loss = 0.0
         pbar = tqdm(total=len(train_loader))
-        for idx, (x, _) in enumerate(train_loader, 1):
-            with torch.autograd.set_detect_anomaly(True):
-                _ge_loss, _d_loss = self.train_step(x)
+        for x, _ in train_loader:
+            _ge_loss, _d_loss = self.train_step(x)
             pbar.set_description(
                 f"Generator/Encoder loss: {_ge_loss.item():.3f}. Discriminator loss: {_d_loss.item():.3f}"
             )
