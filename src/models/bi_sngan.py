@@ -32,6 +32,8 @@ class EncoderBlock(nn.Module):
 
 
 class GeneratorBlock(nn.Module):
+    leak: ClassVar[float] = 0.2
+
     def __init__(
         self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 0
     ) -> None:
@@ -45,12 +47,12 @@ class GeneratorBlock(nn.Module):
             bias=False,
         )
         self.bn = nn.BatchNorm2d(out_channels)
-        self.relu = nn.ReLU(inplace=True)
+        self.activation = nn.LeakyReLU(negative_slope=self.leak, inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
         x = self.bn(x)
-        x = self.relu(x)
+        x = self.activation(x)
         return x
 
 
@@ -191,18 +193,34 @@ class BiSNGAN(nn.Module):
         data_preds, sample_preds = torch.tensor_split(output, 2, dim=0)
         return data_preds, sample_preds
 
+    @torch.no_grad()
+    def evaluate(self, eval_loader: DataLoader) -> torch.Tensor:
+        rec_loss = []
+        pbar = tqdm(total=len(eval_loader), leave=False)
+        self.eval()
+        for x, _ in eval_loader:
+            reconstructed = self.reconstruct(x)
+            mse = nn.functional.mse_loss(input=reconstructed, target=x)
+            pbar.set_description(f"reconstruction loss: {mse.item():.3f}")
+            rec_loss.append(mse)
+            pbar.update()
+        pbar.close()
+        return torch.mean(torch.tensor(rec_loss))
+
     def train_single_epoch(self, train_loader: DataLoader) -> tuple[float, float]:
         ge_loss = 0.0
         d_loss = 0.0
-        pbar = tqdm(total=len(train_loader))
+        pbar = tqdm(total=len(train_loader), leave=False)
+        self.train()
         for x, _ in train_loader:
             _ge_loss, _d_loss = self.train_step(x)
             pbar.set_description(
                 f"Generator/Encoder loss: {_ge_loss.item():.3f}. Discriminator loss: {_d_loss.item():.3f}"
             )
-            pbar.update()
             ge_loss += _ge_loss.item()
             d_loss += _d_loss.item()
+            pbar.update()
+        pbar.close()
 
         return ge_loss / len(train_loader), d_loss / len(train_loader)
 
