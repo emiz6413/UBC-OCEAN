@@ -95,6 +95,10 @@ class Encoder32(Encoder):
     n_blocks = 3  # 32 = 4 * 2 ** n_blocks
 
 
+class Encoder64(Encoder):
+    n_blocks = 4  # 64 = 4 * 2 ** n_blocks
+
+
 class Generator(nn.Module):
     n_blocks: ClassVar[int]
 
@@ -114,6 +118,10 @@ class Generator(nn.Module):
 
 class Generator32(Generator):
     n_blocks = 3  # 32 = 4 * 2 ** n_blocks
+
+
+class Generator64(Generator):
+    n_blocks = 4  # 64 = 4 * 2 ** n_blocks
 
 
 class Discriminator(nn.Module):
@@ -139,31 +147,34 @@ class Discriminator(nn.Module):
             SNDiscriminatorBlock(dim * 2, dim * 2, kernel_size=1),
             spectral_norm(nn.Conv2d(dim * 2, 1, kernel_size=1)),
         )
-        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         x = self.x_mapping(x)
         z = self.z_mapping(z)
         joint = torch.cat((x, z), dim=1)
         joint = self.joint_mapping(joint)
-        prob = self.sigmoid(joint)
-        return prob.view(-1, 1)
+        return joint.view(-1, 1)
 
 
 class Discriminator32(Discriminator):
     n_blocks = 3
 
 
+class Discriminator64(Discriminator):
+    n_blocks = 4
+
+
 class BiSNGAN(nn.Module):
-    def __init__(self, encoder: Encoder, generator: Generator, discriminator: Discriminator) -> None:
+    def __init__(self, encoder: Encoder, generator: Generator, discriminator: Discriminator, amp: bool = False) -> None:
         super().__init__()
         self.encoder = encoder
         self.generator = generator
         self.discriminator = discriminator
         self.latent_dim = self.encoder.latent_dim
-        self.criterion = nn.BCELoss()
+        self.criterion = nn.BCEWithLogitsLoss()
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
+        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
 
     def create_eg_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
         self.ge_optimizer = optim.Adam(
@@ -213,7 +224,8 @@ class BiSNGAN(nn.Module):
         pbar = tqdm(total=len(train_loader), leave=False)
         self.train()
         for x, _ in train_loader:
-            _ge_loss, _d_loss = self.train_step(x)
+            with torch.cuda.amp.autocast(enabled=self.scaler is not None, dtype=torch.float16):
+                _ge_loss, _d_loss = self.train_step(x)
             pbar.set_description(
                 f"Generator/Encoder loss: {_ge_loss.item():.3f}. Discriminator loss: {_d_loss.item():.3f}"
             )
@@ -239,8 +251,8 @@ class BiSNGAN(nn.Module):
         real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake.detach(), z_real.detach())
         d_loss: torch.Tensor = self.criterion(real_preds, y_real) + self.criterion(fake_preds, y_fake)
 
-        d_loss.backward()
-        self.d_optimizer.step()
+        self.scaler.scale(d_loss).backward()
+        self.scaler.step(self.d_optimizer)
 
         # 2. train the encoder and generator
         self.ge_optimizer.zero_grad()
@@ -248,7 +260,9 @@ class BiSNGAN(nn.Module):
         real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
         ge_loss: torch.Tensor = self.criterion(fake_preds, y_real) + self.criterion(real_preds, y_fake)
 
-        ge_loss.backward()
-        self.ge_optimizer.step()
+        self.scaler.scale(ge_loss).backward()
+        self.scaler.step(self.ge_optimizer)
+
+        self.scaler.update()
 
         return d_loss, ge_loss
