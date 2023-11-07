@@ -18,6 +18,7 @@ jupyter = "^1.0.0"
 notebook = "^7.0.6"
 torchvision = "^0.16.0"
 types-tqdm = "^4.66.0.3"
+scipy = "^1.11.3"
 
 [build-system]
 requires = ["poetry-core"]
