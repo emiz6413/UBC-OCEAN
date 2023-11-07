@@ -1,11 +1,12 @@
 import torch
-import torchvision.utils as vutils
+import torchvision.utils as vutils  # type: ignore
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from torchvision.datasets import SVHN
+from torchvision.datasets import SVHN  # type: ignore
 from tqdm.auto import tqdm
 
-from src.models.bi_sngan import BiSNGAN, Discriminator32, Encoder32, Generator32
+from src.bigan import BiGAN
+from src.sngan import Discriminator32, Encoder32, Generator32
 
 BATCH_SIZE = 256
 EPOCHS = 110
@@ -33,7 +34,7 @@ if __name__ == "__main__":
     encoder = Encoder32(input_channels=3)
     discriminator = Discriminator32(input_channels=3)
 
-    model = BiSNGAN(encoder=encoder, generator=generator, discriminator=discriminator, amp=torch.cuda.is_available())
+    model = BiGAN(encoder=encoder, generator=generator, discriminator=discriminator, amp=torch.cuda.is_available())
     model = model.to(DEVICE)
 
     pbar = tqdm(total=EPOCHS)
