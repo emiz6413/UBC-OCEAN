@@ -80,7 +80,7 @@ class Encoder(nn.Module):
                 for i in range(self.n_blocks)
             ],
             SNEncoderBlock(dim, dim, kernel_size=4, stride=1, padding=0),
-            nn.Conv2d(dim, latent_dim, kernel_size=1),
+            spectral_norm(nn.Conv2d(dim, latent_dim, kernel_size=1)),
         )
         self.latent_dim = latent_dim
 
