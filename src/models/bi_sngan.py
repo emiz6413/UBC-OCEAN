@@ -1,11 +1,13 @@
 from itertools import chain
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 import torch
 from torch import nn, optim
 from torch.nn.utils.parametrizations import spectral_norm
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+
+from src.utils.loss import HingeLoss
 
 
 class EncoderBlock(nn.Module):
@@ -164,13 +166,26 @@ class Discriminator64(Discriminator):
     n_blocks = 4
 
 
+LOSS_TYPE = Literal["BCE", "Hinge"]
+
+
 class BiSNGAN(nn.Module):
-    def __init__(self, encoder: Encoder, generator: Generator, discriminator: Discriminator, amp: bool = False) -> None:
+    def __init__(
+        self,
+        encoder: Encoder,
+        generator: Generator,
+        discriminator: Discriminator,
+        amp: bool = False,
+        loss_type: LOSS_TYPE = "Hinge",
+    ) -> None:
         super().__init__()
         self.encoder = encoder
         self.generator = generator
         self.discriminator = discriminator
         self.latent_dim = self.encoder.latent_dim
+        self.loss_type = loss_type
+        self.ge_criterion = self.create_eg_criterion()
+        self.d_criterion = self.create_d_criterion()
         self.criterion = nn.BCEWithLogitsLoss()
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
@@ -182,9 +197,26 @@ class BiSNGAN(nn.Module):
         )
         return self.ge_optimizer
 
-    def create_d_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+    def create_d_optimizer(self, lr: float = 3e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+        """
+        Note: Setting Discriminator's learning rate larger converges faster
+
+        .. Heusel et al. (2017) https://arxiv.org/abs/1706.08500
+        """
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=lr, betas=betas)
         return self.d_optimizer
+
+    def create_eg_criterion(self) -> nn.Module:
+        if self.loss_type == "BCE":
+            return nn.BCEWithLogitsLoss()
+        if self.loss_type == "Hinge":
+            return HingeLoss(for_discriminator=False)
+
+    def create_d_criterion(self) -> nn.Module:
+        if self.loss_type == "BCE":
+            return nn.BCEWithLogitsLoss()
+        if self.loss_type == "Hinge":
+            return HingeLoss(for_discriminator=True)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         return self.encoder(x)
@@ -249,7 +281,7 @@ class BiSNGAN(nn.Module):
         self.d_optimizer.zero_grad()
 
         real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake.detach(), z_real.detach())
-        d_loss: torch.Tensor = self.criterion(real_preds, y_real) + self.criterion(fake_preds, y_fake)
+        d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
 
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.d_optimizer)
@@ -258,7 +290,7 @@ class BiSNGAN(nn.Module):
         self.ge_optimizer.zero_grad()
 
         real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-        ge_loss: torch.Tensor = self.criterion(fake_preds, y_real) + self.criterion(real_preds, y_fake)
+        ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
 
         self.scaler.scale(ge_loss).backward()
         self.scaler.step(self.ge_optimizer)
