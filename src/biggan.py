@@ -1,5 +1,4 @@
 from functools import partial
-from typing import ClassVar
 
 import torch
 from torch import nn
@@ -168,11 +167,9 @@ class SNDiscriminatorBlock(Block):
 
 
 class Generator128(nn.Module):
-    def __init__(self, latent_dim: int = 120, middle_dim: int = 96, sa_idx: int = 4) -> None:
+    def __init__(self, latent_dim: int = 120, middle_dim: int = 96) -> None:
         super().__init__()
-        self.latent_dim = latent_dim
-        self.sa_idx = sa_idx
-        self.pre_linear = spectral_norm(nn.Linear(self.latent_dim, 4 * 4 * 16 * middle_dim))
+        self.pre_linear = nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1)
         self.first_channels = 16 * middle_dim
         self.convs = nn.Sequential(
             GeneratorBlock(16 * middle_dim, 16 * middle_dim),  # 4 -> 8
@@ -183,7 +180,7 @@ class Generator128(nn.Module):
             GeneratorBlock(2 * middle_dim, 1 * middle_dim),  # 64 -> 128
             nn.BatchNorm2d(middle_dim, eps=1e-4),
             nn.ReLU(inplace=True),
-            spectral_norm(nn.Conv2d(middle_dim, 3, kernel_size=3, padding=1)),
+            nn.Conv2d(middle_dim, 3, kernel_size=3, padding=1),
             nn.Tanh(),
         )
 
@@ -197,12 +194,10 @@ class Generator128(nn.Module):
 class Encoder128(nn.Module):
     """
     Note:
-        This is based on the implementation of Discriminator.
+        This is based on the original implementation of Discriminator.
     """
 
-    block: ClassVar[type[Block]] = EncoderBlock
-
-    def __init__(self, latent_dim: int = 128, middle_dim: int = 96, in_channels: int = 3) -> None:
+    def __init__(self, latent_dim: int = 120, middle_dim: int = 96, in_channels: int = 3) -> None:
         super().__init__()
         self.pre_convs = nn.Sequential(
             nn.Conv2d(in_channels, middle_dim, kernel_size=3, padding=1),
@@ -214,13 +209,13 @@ class Encoder128(nn.Module):
         self.pool = nn.AvgPool2d(kernel_size=2)
 
         self.convs = nn.Sequential(
-            self.block(middle_dim, middle_dim),  # 64 -> 32
-            self.block(middle_dim, 2 * middle_dim),  # 32 -> 16
+            EncoderBlock(middle_dim, middle_dim),  # 64 -> 32
+            EncoderBlock(middle_dim, 2 * middle_dim),  # 32 -> 16
             SelfAttention(2 * middle_dim),
-            self.block(middle_dim * 2, middle_dim * 4),  # 16 -> 8
-            self.block(middle_dim * 4, middle_dim * 8),  # 8 -> 4
-            self.block(middle_dim * 8, middle_dim * 16),  # 4 -> 2
-            self.block(middle_dim * 16, middle_dim * 16, downsample=False),  # 2 -> 2
+            EncoderBlock(middle_dim * 2, middle_dim * 4),  # 16 -> 8
+            EncoderBlock(middle_dim * 4, middle_dim * 8),  # 8 -> 4
+            EncoderBlock(middle_dim * 8, middle_dim * 16),  # 4 -> 2
+            EncoderBlock(middle_dim * 16, middle_dim * 16, downsample=False),  # 2 -> 2
             nn.ReLU(inplace=True),
         )
         self.relu = nn.ReLU(inplace=True)
@@ -237,13 +232,60 @@ class Encoder128(nn.Module):
         return x
 
 
-class Discriminator128(Encoder128):
-    block = SNDiscriminatorBlock
+class Discriminator128(nn.Module):
+    def __init__(self, latent_dim: int = 120, middle_dim: int = 96, in_channels: int = 3) -> None:
+        super().__init__()
+        self.pre_convs = nn.Sequential(
+            spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=3, padding=1)),
+            nn.ReLU(inplace=True),
+            spectral_norm(nn.Conv2d(middle_dim, middle_dim, kernel_size=3, padding=1)),
+            nn.AvgPool2d(kernel_size=2),
+        )
+        self.pre_skip = spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=1))
+        self.pool = nn.AvgPool2d(kernel_size=2)
 
-    def __init__(self, middle_dim: int = 96, in_channels: int = 3) -> None:
-        super().__init__(latent_dim=1, middle_dim=middle_dim, in_channels=in_channels)
-        for i, module in enumerate(self.pre_convs.modules()):
-            if isinstance(module, nn.Conv2d):
-                self.pre_convs[i] = spectral_norm(module)
-        self.pre_skip = spectral_norm(self.pre_skip)
-        self.final_projection = spectral_norm(self.final_projection)
+        self.x_mappings = nn.Sequential(
+            SNDiscriminatorBlock(middle_dim, middle_dim),  # 64 -> 32
+            SNDiscriminatorBlock(middle_dim, middle_dim * 2),  # 32 -> 16
+            SelfAttention(2 * middle_dim),
+            SNDiscriminatorBlock(middle_dim * 2, middle_dim * 4),  # 16 -> 8
+            SNDiscriminatorBlock(middle_dim * 4, middle_dim * 8),  # 8 -> 4
+            SNDiscriminatorBlock(middle_dim * 8, middle_dim * 16),  # 4 -> 2
+            SNDiscriminatorBlock(middle_dim * 16, middle_dim * 16),  # 2 -> 1
+        )
+
+        self.z_mappings = nn.Sequential(
+            SNDiscriminatorBlock(
+                latent_dim * 1, middle_dim * 1, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+            SNDiscriminatorBlock(
+                middle_dim * 1, middle_dim * 2, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+            SNDiscriminatorBlock(
+                middle_dim * 2, middle_dim * 4, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+        )
+
+        self.joint_mappings = nn.Sequential(
+            SNDiscriminatorBlock(
+                middle_dim * 20, middle_dim * 16, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+            SNDiscriminatorBlock(
+                middle_dim * 16, middle_dim * 8, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+            SNDiscriminatorBlock(
+                middle_dim * 8, middle_dim * 4, downsample=False, kernel_size=1, padding=0, batch_norm=False
+            ),
+            spectral_norm(nn.Conv2d(middle_dim * 4, 1, kernel_size=1)),
+        )
+
+    def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+        skip = self.pre_skip(self.pool(x))
+        x = self.pre_convs(x) + skip
+        x = self.x_mappings(x)  # bs, middlex16, 1, 1
+
+        z = self.z_mappings(z)  # bs, middlex4, 1, 1
+
+        joint = torch.cat((x, z), dim=1)  # bs, middlex20, 1, 1
+        joint = self.joint_mappings(joint)  # bs, 1, 1, 1
+        return joint.view(-1, 1)
