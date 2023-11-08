@@ -5,50 +5,50 @@ from torch import nn
 from torch.nn.utils.parametrizations import spectral_norm
 
 
-class SNEncoderBlock(nn.Module):
+class EncoderBlock(nn.Module):
     def __init__(
         self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 0
     ) -> None:
         super().__init__()
-        self.conv = spectral_norm(
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                bias=False,
-            )
+        self.conv = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
         )
+        self.bn = nn.BatchNorm2d(num_features=out_channels)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
+        x = self.bn(x)
         x = self.relu(x)
         return x
 
 
-class SNGeneratorBlock(nn.Module):
+class GeneratorBlock(nn.Module):
     leak: ClassVar[float] = 0.2
 
     def __init__(
         self, in_channels: int, out_channels: int, kernel_size: int = 3, stride: int = 1, padding: int = 0
     ) -> None:
         super().__init__()
-        self.conv = spectral_norm(
-            nn.ConvTranspose2d(
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                bias=False,
-            )
+        self.conv = nn.ConvTranspose2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
         )
+        self.bn = nn.BatchNorm2d(out_channels)
         self.activation = nn.LeakyReLU(negative_slope=self.leak, inplace=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
+        x = self.bn(x)
         x = self.activation(x)
         return x
 
@@ -76,11 +76,11 @@ class Encoder(nn.Module):
         super().__init__()
         self.downs = nn.Sequential(
             *[
-                SNEncoderBlock(dim if i else input_channels, dim, kernel_size=4, stride=2, padding=1)
+                EncoderBlock(dim if i else input_channels, dim, kernel_size=4, stride=2, padding=1)
                 for i in range(self.n_blocks)
             ],
-            SNEncoderBlock(dim, dim, kernel_size=4, stride=1, padding=0),
-            spectral_norm(nn.Conv2d(dim, latent_dim, kernel_size=1)),
+            EncoderBlock(dim, dim, kernel_size=4, stride=1, padding=0),
+            nn.Conv2d(dim, latent_dim, kernel_size=1),
         )
         self.latent_dim = latent_dim
 
@@ -102,9 +102,9 @@ class Generator(nn.Module):
     def __init__(self, output_channels: int, latent_dim: int = 128, dim: int = 128) -> None:
         super().__init__()
         self.ups = nn.Sequential(
-            SNGeneratorBlock(latent_dim, dim, kernel_size=4, stride=1, padding=0),
-            *[SNGeneratorBlock(dim, dim, kernel_size=4, stride=2, padding=1) for _ in range(self.n_blocks - 1)],
-            spectral_norm(nn.ConvTranspose2d(dim, output_channels, kernel_size=4, stride=2, padding=1, bias=False)),
+            GeneratorBlock(latent_dim, dim, kernel_size=4, stride=1, padding=0),
+            *[GeneratorBlock(dim, dim, kernel_size=4, stride=2, padding=1) for _ in range(self.n_blocks - 1)],
+            nn.ConvTranspose2d(dim, output_channels, kernel_size=4, stride=2, padding=1, bias=False),
             nn.Tanh(),
         )
         self.latent_dim = latent_dim
