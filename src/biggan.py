@@ -169,6 +169,7 @@ class SNDiscriminatorBlock(Block):
 class Generator128(nn.Module):
     def __init__(self, latent_dim: int = 120, middle_dim: int = 96) -> None:
         super().__init__()
+        self.latent_dim = latent_dim  # for compatibility
         self.pre_linear = nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1)
         self.first_channels = 16 * middle_dim
         self.convs = nn.Sequential(
@@ -199,6 +200,7 @@ class Encoder128(nn.Module):
 
     def __init__(self, latent_dim: int = 120, middle_dim: int = 96, in_channels: int = 3) -> None:
         super().__init__()
+        self.latent_dim = latent_dim  # for compatibility
         self.pre_convs = nn.Sequential(
             nn.Conv2d(in_channels, middle_dim, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
@@ -220,14 +222,13 @@ class Encoder128(nn.Module):
         )
         self.relu = nn.ReLU(inplace=True)
 
-        self.final_projection = nn.Linear(middle_dim * 16, latent_dim)
+        self.final_projection = nn.Conv2d(middle_dim * 16, latent_dim, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         skip = self.pre_skip(self.pool(x))
         x = self.pre_convs(x) + skip
         x = self.convs(x)  # bs, middlex16, 2, 2
-        x = x.flatten(start_dim=2)  # bs, middlex16, 4
-        x = x.sum(dim=2)  # bs, middlex16
+        x = x.sum(dim=(2, 3), keepdim=True)  # bs, middlex16, 1, 1
         x = self.final_projection(x)
         return x
 
@@ -235,6 +236,7 @@ class Encoder128(nn.Module):
 class Discriminator128(nn.Module):
     def __init__(self, latent_dim: int = 120, middle_dim: int = 96, in_channels: int = 3) -> None:
         super().__init__()
+        self.latent_dim = latent_dim  # for compatibility
         self.pre_convs = nn.Sequential(
             spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=3, padding=1)),
             nn.ReLU(inplace=True),
@@ -289,3 +291,8 @@ class Discriminator128(nn.Module):
         joint = torch.cat((x, z), dim=1)  # bs, middlex20, 1, 1
         joint = self.joint_mappings(joint)  # bs, 1, 1, 1
         return joint.view(-1, 1)
+
+
+if __name__ == "__main__":
+    encoder = Encoder128()
+    print(encoder(torch.rand(4, 3, 128, 128)).shape)
