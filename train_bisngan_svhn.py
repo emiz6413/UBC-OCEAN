@@ -8,8 +8,8 @@ from tqdm.auto import tqdm
 from src.bigan import BiGAN
 from src.sngan import Discriminator32, Encoder32, Generator32
 
-BATCH_SIZE = 256
-EPOCHS = 110
+BATCH_SIZE = 512
+EPOCHS = 120
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 transform = transforms.Compose(
@@ -19,6 +19,12 @@ transform = transforms.Compose(
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=(0.5, 0.5, 0.5)),
     ]
 )
+
+
+class SVHNDataset(SVHN):
+    def __getitem__(self, index: int) -> torch.Tensor:
+        return super().__getitem__(index)[0]
+
 
 reverse_transform = transforms.Compose(
     [transforms.Normalize(mean=[-1, -1, -1], std=[2, 2, 2]), transforms.ToPILImage()]

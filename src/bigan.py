@@ -87,7 +87,7 @@ class BiGAN(nn.Module):
         rec_loss = []
         pbar = tqdm(total=len(eval_loader), leave=False)
         self.eval()
-        for x, _ in eval_loader:
+        for x in eval_loader:
             reconstructed = self.reconstruct(x)
             mse = nn.functional.mse_loss(input=reconstructed, target=x)
             pbar.set_description(f"reconstruction loss: {mse.item():.3f}")
