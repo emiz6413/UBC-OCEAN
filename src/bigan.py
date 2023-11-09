@@ -33,7 +33,8 @@ class BiGAN(nn.Module):
         self.criterion = nn.BCEWithLogitsLoss()
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
-        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
+        self.amp = amp
+        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=self.amp)
         self.disc_iters = disc_iters
         self.ge_iters = ge_iters
 
@@ -83,18 +84,18 @@ class BiGAN(nn.Module):
         return data_preds, sample_preds
 
     @torch.no_grad()
-    def evaluate(self, eval_loader: DataLoader) -> torch.Tensor:
-        rec_loss = []
+    def evaluate(self, eval_loader: DataLoader) -> float:
+        rec_loss_meter = AverageMeter()
         pbar = tqdm(total=len(eval_loader), leave=False)
         self.eval()
         for x in eval_loader:
             reconstructed = self.reconstruct(x)
             mse = nn.functional.mse_loss(input=reconstructed, target=x)
-            pbar.set_description(f"reconstruction loss: {mse.item():.3f}")
-            rec_loss.append(mse)
+            rec_loss_meter.update(mse.item())
+            pbar.set_description(f"reconstruction loss: {rec_loss_meter.average:.3f}")
             pbar.update()
         pbar.close()
-        return torch.mean(torch.tensor(rec_loss))
+        return rec_loss_meter.average
 
     def train_single_epoch(self, train_loader: DataLoader) -> tuple[float, float]:
         ge_loss_meter = AverageMeter()
@@ -104,7 +105,7 @@ class BiGAN(nn.Module):
         d_iter = 0
         ge_iter = 0
         for x in train_loader:
-            with torch.cuda.amp.autocast(enabled=self.scaler is not None, dtype=torch.float16):
+            with torch.cuda.amp.autocast(enabled=self.amp, dtype=torch.float16):
                 if d_iter < self.disc_iters:
                     d_loss = self.train_disc(x)
                     d_loss_meter.update(d_loss.item())
