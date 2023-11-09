@@ -103,7 +103,7 @@ class BiGAN(nn.Module):
         self.train()
         d_iter = 0
         ge_iter = 0
-        for x, *_ in train_loader:
+        for x in train_loader:
             with torch.cuda.amp.autocast(enabled=self.scaler is not None, dtype=torch.float16):
                 if d_iter < self.disc_iters:
                     d_loss = self.train_disc(x)
