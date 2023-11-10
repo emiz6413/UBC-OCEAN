@@ -291,8 +291,3 @@ class Discriminator128(nn.Module):
         joint = torch.cat((x, z), dim=1)  # bs, middlex20, 1, 1
         joint = self.joint_mappings(joint)  # bs, 1, 1, 1
         return joint.view(-1, 1)
-
-
-if __name__ == "__main__":
-    encoder = Encoder128()
-    print(encoder(torch.rand(4, 3, 128, 128)).shape)
