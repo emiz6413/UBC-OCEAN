@@ -33,8 +33,7 @@ class BiGAN(nn.Module):
         self.criterion = nn.BCEWithLogitsLoss()
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
-        self.amp = amp
-        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=self.amp)
+        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
         self.disc_iters = disc_iters
         self.ge_iters = ge_iters
 
@@ -105,19 +104,18 @@ class BiGAN(nn.Module):
         d_iter = 0
         ge_iter = 0
         for x in train_loader:
-            with torch.cuda.amp.autocast(enabled=self.amp, dtype=torch.float16):
-                if d_iter < self.disc_iters:
-                    d_loss = self.train_disc(x)
-                    d_loss_meter.update(d_loss.item())
-                    d_iter += 1
-                else:
-                    ge_loss = self.train_ge(x)
-                    ge_loss_meter.update(ge_loss.item())
-                    ge_iter += 1
+            if d_iter < self.disc_iters:
+                d_loss = self.train_disc(x)
+                d_loss_meter.update(d_loss.item())
+                d_iter += 1
+            else:
+                ge_loss = self.train_ge(x)
+                ge_loss_meter.update(ge_loss.item())
+                ge_iter += 1
 
-                    if ge_iter == self.ge_iters:
-                        d_iter = 0
-                        ge_iter = 0
+                if ge_iter == self.ge_iters:
+                    d_iter = 0
+                    ge_iter = 0
 
             pbar.set_description(f"GE loss: {ge_loss_meter.average:.3f}. D loss: {d_loss_meter.average:.3f}")
             pbar.update()
@@ -132,12 +130,13 @@ class BiGAN(nn.Module):
         y_real = torch.ones((x_real.size(0), 1), device=x_real.device)
         y_fake = torch.zeros_like(y_real)
         z_fake = torch.randn(x_real.size(0), self.latent_dim, 1, 1, device=x_real.device)
-        with torch.no_grad():
-            z_real = self.encode(x_real)
-            x_fake = self.generate(z_fake)
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            with torch.no_grad():
+                z_real = self.encode(x_real)
+                x_fake = self.generate(z_fake)
 
-        real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-        d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
+            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
 
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.d_optimizer)
@@ -152,11 +151,12 @@ class BiGAN(nn.Module):
         y_fake = torch.zeros_like(y_real)
         z_fake = torch.randn(x_real.size(0), self.latent_dim, 1, 1, device=x_real.device)
 
-        z_real = self.encode(x_real)
-        x_fake = self.generate(z_fake)
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            z_real = self.encode(x_real)
+            x_fake = self.generate(z_fake)
 
-        real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-        ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
+            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
 
         self.scaler.scale(ge_loss).backward()
         self.scaler.step(self.ge_optimizer)
