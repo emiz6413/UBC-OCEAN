@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from scipy.stats import truncnorm  # type: ignore
 from torch import nn
+from torch.nn import functional as F
 
 
 def truncated_z_sample(batch_size: int, z_dim: int, truncation: float = 0.5, seed: int | None = None):
@@ -15,7 +16,7 @@ class AverageMeter:
         self.reset()
 
     def reset(self) -> None:
-        self.sum = 0
+        self.sum = 0.0
         self.count = 0
 
     def update(self, val: float, n: int = 1) -> None:
@@ -43,11 +44,9 @@ class HingeLoss(nn.Module):
     @staticmethod
     def compute_loss_for_discriminator(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         if all(target == 1):
-            min_val = torch.min(input - 1, torch.zeros_like(input))
-            return -torch.mean(min_val)
+            return torch.mean(F.relu(1.0 - input))
         elif all(target == 0):
-            min_val = torch.min(-input - 1, torch.zeros_like(input))
-            return -torch.mean(min_val)
+            return torch.mean(F.relu(1.0 + input))
         else:
             raise ValueError("invalid target value")
 
