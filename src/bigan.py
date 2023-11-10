@@ -18,6 +18,7 @@ class BiGAN(nn.Module):
         generator: nn.Module,
         discriminator: nn.Module,
         amp: bool = False,
+        eval_amp: bool = False,
         loss_type: LOSS_TYPE = "Hinge",
         disc_iters: int = 2,
         ge_iters: int = 1,
@@ -34,6 +35,7 @@ class BiGAN(nn.Module):
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
         self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
+        self.eval_amp = eval_amp
         self.disc_iters = disc_iters
         self.ge_iters = ge_iters
 
@@ -88,7 +90,8 @@ class BiGAN(nn.Module):
         pbar = tqdm(total=len(eval_loader), leave=False)
         self.eval()
         for x in eval_loader:
-            reconstructed = self.reconstruct(x)
+            with torch.cuda.amp.autocast(enabled=self.eval_amp):
+                reconstructed = self.reconstruct(x)
             mse = nn.functional.mse_loss(input=reconstructed, target=x)
             rec_loss_meter.update(mse.item())
             pbar.set_description(f"reconstruction loss: {rec_loss_meter.average:.3f}")
