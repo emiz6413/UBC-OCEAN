@@ -39,7 +39,7 @@ class SelfAttention(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Self attention + skip connection"""
-        bs, c, w, h = x.size()
+        bs, _, w, h = x.size()
         wh = w * h
 
         query = self.query_projection(x)
@@ -103,6 +103,7 @@ class Block(nn.Module):
         skip = x
 
         x = self.maybe_bn1(x)
+        x = self.activation(x)
         x = self.maybe_upsample(x)  # type: ignore
         x = self.conv1(x)
         x = self.maybe_bn2(x)
@@ -111,8 +112,8 @@ class Block(nn.Module):
         x = self.maybe_downsample(x)  # type: ignore
 
         skip = self.maybe_upsample(skip)  # type: ignore
-        skip = self.maybe_downsample(skip)  # type: ignore
         skip = self.conv_sc(skip)
+        skip = self.maybe_downsample(skip)  # type: ignore
 
         return x + skip
 
@@ -182,7 +183,7 @@ class Generator128(nn.Module):
         super().__init__()
         self.latent_dim = latent_dim  # for compatibility
         self.pre_linear = spectral_norm(
-            nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1), enabled=sn_enabled
+            nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1, bias=False), enabled=sn_enabled
         )
         self.first_channels = 16 * middle_dim
         self.convs = nn.Sequential(
@@ -192,7 +193,7 @@ class Generator128(nn.Module):
             GeneratorBlock(4 * middle_dim, 2 * middle_dim, sn_enabled=sn_enabled),  # 32 -> 64
             SelfAttention(2 * middle_dim, sn_enabled=sn_enabled),
             GeneratorBlock(2 * middle_dim, 1 * middle_dim, sn_enabled=sn_enabled),  # 64 -> 128
-            nn.BatchNorm2d(middle_dim, eps=1e-4),
+            nn.BatchNorm2d(middle_dim),  # original code: eps=1e-4
             nn.ReLU(inplace=True),
             spectral_norm(nn.Conv2d(middle_dim, 3, kernel_size=3, padding=1), enabled=sn_enabled),
             nn.Tanh(),
@@ -222,25 +223,29 @@ class Encoder128(nn.Module):
             spectral_norm(nn.Conv2d(middle_dim, middle_dim, kernel_size=3, padding=1), enabled=sn_enabled),
             nn.AvgPool2d(kernel_size=2),
         )
-        self.pre_skip = spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=1), enabled=sn_enabled)
-        self.pool = nn.AvgPool2d(kernel_size=2)
+        self.pre_skip = nn.Sequential(
+            nn.AvgPool2d(kernel_size=2),
+            spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=1), enabled=sn_enabled),
+        )
 
+        bn = not sn_enabled
         self.convs = nn.Sequential(
-            EncoderBlock(middle_dim, middle_dim, sn_enabled=sn_enabled),  # 64 -> 32
-            EncoderBlock(middle_dim, 2 * middle_dim, sn_enabled=sn_enabled),  # 32 -> 16
+            EncoderBlock(middle_dim, middle_dim, batch_norm=bn, sn_enabled=sn_enabled),  # 64 -> 32
+            EncoderBlock(middle_dim, 2 * middle_dim, batch_norm=bn, sn_enabled=sn_enabled),  # 32 -> 16
             SelfAttention(2 * middle_dim, sn_enabled=sn_enabled),
-            EncoderBlock(middle_dim * 2, middle_dim * 4, sn_enabled=sn_enabled),  # 16 -> 8
-            EncoderBlock(middle_dim * 4, middle_dim * 8, sn_enabled=sn_enabled),  # 8 -> 4
-            EncoderBlock(middle_dim * 8, middle_dim * 16, sn_enabled=sn_enabled),  # 4 -> 2
-            EncoderBlock(middle_dim * 16, middle_dim * 16, downsample=False, sn_enabled=sn_enabled),  # 2 -> 2
+            EncoderBlock(middle_dim * 2, middle_dim * 4, batch_norm=bn, sn_enabled=sn_enabled),  # 16 -> 8
+            EncoderBlock(middle_dim * 4, middle_dim * 8, batch_norm=bn, sn_enabled=sn_enabled),  # 8 -> 4
+            EncoderBlock(middle_dim * 8, middle_dim * 16, batch_norm=bn, sn_enabled=sn_enabled),  # 4 -> 2
+            EncoderBlock(
+                middle_dim * 16, middle_dim * 16, batch_norm=bn, downsample=False, sn_enabled=sn_enabled
+            ),  # 2 -> 2
             nn.ReLU(inplace=True),
         )
-        self.relu = nn.ReLU(inplace=True)
 
         self.final_projection = spectral_norm(nn.Conv2d(middle_dim * 16, latent_dim, kernel_size=1), enabled=sn_enabled)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        skip = self.pre_skip(self.pool(x))
+        skip = self.pre_skip(x)
         x = self.pre_convs(x) + skip
         x = self.convs(x)  # bs, middlex16, 2, 2
         x = x.sum(dim=(2, 3), keepdim=True)  # bs, middlex16, 1, 1
@@ -260,17 +265,20 @@ class Discriminator128(nn.Module):
             spectral_norm(nn.Conv2d(middle_dim, middle_dim, kernel_size=3, padding=1), enabled=sn_enabled),
             nn.AvgPool2d(kernel_size=2),
         )
-        self.pre_skip = spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=1), enabled=sn_enabled)
-        self.pool = nn.AvgPool2d(kernel_size=2)
+        self.pre_skip = nn.Sequential(
+            nn.AvgPool2d(kernel_size=2),
+            spectral_norm(nn.Conv2d(in_channels, middle_dim, kernel_size=1), enabled=sn_enabled),
+        )
 
+        bn = not sn_enabled
         self.x_mappings = nn.Sequential(
-            DiscriminatorBlock(middle_dim, middle_dim, sn_enabled=sn_enabled),  # 64 -> 32
-            DiscriminatorBlock(middle_dim, middle_dim * 2, sn_enabled=sn_enabled),  # 32 -> 16
+            DiscriminatorBlock(middle_dim, middle_dim, batch_norm=bn, sn_enabled=sn_enabled),  # 64 -> 32
+            DiscriminatorBlock(middle_dim, middle_dim * 2, batch_norm=bn, sn_enabled=sn_enabled),  # 32 -> 16
             SelfAttention(2 * middle_dim, sn_enabled=sn_enabled),
-            DiscriminatorBlock(middle_dim * 2, middle_dim * 4, sn_enabled=sn_enabled),  # 16 -> 8
-            DiscriminatorBlock(middle_dim * 4, middle_dim * 8, sn_enabled=sn_enabled),  # 8 -> 4
-            DiscriminatorBlock(middle_dim * 8, middle_dim * 16, sn_enabled=sn_enabled),  # 4 -> 2
-            DiscriminatorBlock(middle_dim * 16, middle_dim * 16, sn_enabled=sn_enabled),  # 2 -> 1
+            DiscriminatorBlock(middle_dim * 2, middle_dim * 4, batch_norm=bn, sn_enabled=sn_enabled),  # 16 -> 8
+            DiscriminatorBlock(middle_dim * 4, middle_dim * 8, batch_norm=bn, sn_enabled=sn_enabled),  # 8 -> 4
+            DiscriminatorBlock(middle_dim * 8, middle_dim * 16, batch_norm=bn, sn_enabled=sn_enabled),  # 4 -> 2
+            DiscriminatorBlock(middle_dim * 16, middle_dim * 16, batch_norm=bn, sn_enabled=sn_enabled),  # 2 -> 1
         )
 
         self.z_mappings = nn.Sequential(
@@ -280,7 +288,7 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
             DiscriminatorBlock(
@@ -289,7 +297,7 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
             DiscriminatorBlock(
@@ -298,7 +306,7 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
         )
@@ -310,7 +318,7 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
             DiscriminatorBlock(
@@ -319,7 +327,7 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
             DiscriminatorBlock(
@@ -328,14 +336,14 @@ class Discriminator128(nn.Module):
                 downsample=False,
                 kernel_size=1,
                 padding=0,
-                batch_norm=False,
+                batch_norm=bn,
                 sn_enabled=sn_enabled,
             ),
             spectral_norm(nn.Conv2d(middle_dim * 4, 1, kernel_size=1), enabled=sn_enabled),
         )
 
     def forward(self, x: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
-        skip = self.pre_skip(self.pool(x))
+        skip = self.pre_skip(x)
         x = self.pre_convs(x) + skip
         x = self.x_mappings(x)  # bs, middlex16, 1, 1
 
