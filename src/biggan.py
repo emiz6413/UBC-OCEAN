@@ -96,8 +96,8 @@ class Block(nn.Module):
         self.maybe_upsample = partial(F.interpolate, scale_factor=2) if upsample else nn.Identity()
         self.maybe_downsample = partial(F.avg_pool2d, kernel_size=2) if downsample else nn.Identity()
         self.activation = nn.ReLU(inplace=True)
-        self.maybe_bn1 = nn.BatchNorm2d(in_channels) if batch_norm else nn.Identity()
-        self.maybe_bn2 = nn.BatchNorm2d(out_channels) if batch_norm else nn.Identity()
+        self.maybe_bn1 = nn.BatchNorm2d(in_channels, eps=1e-4, momentum=0.1) if batch_norm else nn.Identity()
+        self.maybe_bn2 = nn.BatchNorm2d(out_channels, eps=1e-4, momentum=0.1) if batch_norm else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         skip = x
@@ -183,7 +183,7 @@ class Generator128(nn.Module):
         super().__init__()
         self.latent_dim = latent_dim  # for compatibility
         self.pre_linear = spectral_norm(
-            nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1, bias=False), enabled=sn_enabled
+            nn.Conv2d(latent_dim, 4 * 4 * 16 * middle_dim, kernel_size=1), enabled=sn_enabled
         )
         self.first_channels = 16 * middle_dim
         self.convs = nn.Sequential(
