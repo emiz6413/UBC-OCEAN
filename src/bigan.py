@@ -39,13 +39,13 @@ class BiGAN(nn.Module):
         self.disc_iters = disc_iters
         self.ge_iters = ge_iters
 
-    def create_eg_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+    def create_eg_optimizer(self, lr: float = 5e-5, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         self.ge_optimizer = optim.Adam(
             chain(self.encoder.parameters(), self.generator.parameters()), lr=lr, betas=betas
         )
         return self.ge_optimizer
 
-    def create_d_optimizer(self, lr: float = 2e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+    def create_d_optimizer(self, lr: float = 2e-4, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         """
         Note: Setting Discriminator's learning rate larger converges faster
 
