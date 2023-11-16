@@ -127,7 +127,8 @@ class VanillaVAE(nn.Module):
         decoder: nn.Module,
         latent_dim: int = 128,
         kl_w: float = 5e-5,
-        device: torch.device | None = None,
+        device: torch.device = torch.device("cuda"),
+        amp: bool = False,
     ) -> None:
         super().__init__()
         self.encoder = encoder
@@ -137,9 +138,8 @@ class VanillaVAE(nn.Module):
         self.fc_var = nn.Linear(latent_dim, latent_dim)
         self.kl_w = kl_w
         self.optimizer = self.configure_optimizer()
-        if device is None:
-            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.device = device
+        self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
 
     def configure_optimizer(self) -> torch.optim.Optimizer:
         self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -185,18 +185,21 @@ class VanillaVAE(nn.Module):
 
     def train_step(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.optimizer.zero_grad()
-        x_hat, mu, log_var = self.forward(x)
-        rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
-        loss = rec_loss + self.kl_w * kl_loss
-        loss.backward()
-        self.optimizer.step()
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            x_hat, mu, log_var = self.forward(x)
+            rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
+            loss = rec_loss + self.kl_w * kl_loss
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         return loss, rec_loss, kl_loss
 
     @torch.no_grad()
     def eval_step(self, x: torch.Tensor) -> torch.Tensor:
-        x_hat, mu, log_var = self.forward(x)
-        rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
-        loss = rec_loss + self.kl_w * kl_loss
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            x_hat, mu, log_var = self.forward(x)
+            rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
+            loss = rec_loss + self.kl_w * kl_loss
         return loss, rec_loss, kl_loss
 
     def train_single_epoch(self, data_loader: DataLoader) -> tuple[float, float, float]:
