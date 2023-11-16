@@ -15,12 +15,12 @@ class AutoEncoder(nn.Module):
         self.optimizer = self.configure_optimizer()
         self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
 
-    def to(self, device: torch.device) -> "AutoEncoder":
+    def to(self, device: torch.device) -> "AutoEncoder":  # type: ignore[override]
         self.device = device
-        return super().to(device=device)  # type: ignore
+        return super().to(device=device)
 
     def configure_optimizer(self) -> optim.Optimizer:
-        return optim.Adam(self.parameters(), lr=1e-3)
+        return optim.Adam(self.parameters(), lr=1e-4)
 
     def criterion(self, x: torch.Tensor, x_hat: torch.Tensor) -> torch.Tensor:
         return F.mse_loss(x_hat, x.to(x_hat.device), reduction="mean")
