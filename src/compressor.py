@@ -7,8 +7,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, IterableDataset
-from torchvision.io import read_image
-from torchvision.transforms import Compose, Lambda
+from torchvision.io import read_image  # type: ignore[import-untyped]
+from torchvision.transforms import Compose, Lambda  # type: ignore[import-untyped]
 
 
 class ImageIterator(IterableDataset):
