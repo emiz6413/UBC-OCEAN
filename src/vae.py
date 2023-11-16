@@ -197,7 +197,7 @@ class VanillaVAE(nn.Module):
         x_hat, mu, log_var = self.forward(x)
         rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
         loss = rec_loss + self.kl_w * kl_loss
-        return loss
+        return loss, rec_loss, kl_loss
 
     def train_single_epoch(self, data_loader: DataLoader) -> tuple[float, float, float]:
         self.train()
