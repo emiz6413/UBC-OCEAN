@@ -210,6 +210,8 @@ class VanillaVAE(nn.Module):
         pbar = tqdm(total=len(data_loader))
         for x in data_loader:
             _loss, _rec_loss, _kl_loss = self.train_step(x)
+            if not torch.isfinite():
+                raise RuntimeError(f"loss not finite: {_loss}")
             loss.update(_loss.item())
             rec_loss.update(_rec_loss.item())
             kl_loss.update(_kl_loss.item())
