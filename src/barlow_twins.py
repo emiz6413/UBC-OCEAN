@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch import nn
+from torch import nn, optim
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.models import resnet50
@@ -10,15 +10,11 @@ from tqdm.auto import tqdm
 from .utils import AverageMeter
 
 
-def off_diagnoal(x: torch.Tensor) -> torch.Tensor:
-    n = x.size(0)
-    return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
-
-
 class BarlowTwins(nn.Module):
     def __init__(
         self,
         latent_dim: int = 128,
+        projector_dim: int = 8192,
         lambd: float = 0.0051,
         amp: bool = False,
         device: torch.device = torch.device("cuda"),
@@ -29,13 +25,13 @@ class BarlowTwins(nn.Module):
         self.lambd = lambd
 
         self.projector = nn.Sequential(
-            nn.Linear(in_features=2048, out_features=8192, bias=False),
-            nn.BatchNorm2d(num_features=8192),
+            nn.Linear(in_features=2048, out_features=projector_dim, bias=False),
+            nn.BatchNorm1d(num_features=projector_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=8192, out_features=8192, bias=False),
-            nn.BatchNorm2d(num_features=8192),
+            nn.Linear(in_features=projector_dim, out_features=projector_dim, bias=False),
+            nn.BatchNorm1d(num_features=projector_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=8192, out_features=latent_dim, bias=False),
+            nn.Linear(in_features=projector_dim, out_features=latent_dim, bias=False),
         )
         self.bn = nn.BatchNorm1d(num_features=latent_dim, affine=False)
         self.optimizer = self.configure_optimizer()
@@ -43,14 +39,12 @@ class BarlowTwins(nn.Module):
         self.device = device
 
     def configure_optimizer(self) -> torch.optim.Optimizer:
-        """
-        Note:
-            The original implelemtation uses LARS optimizer
-        """
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-4, weight_decay=1.5e-6)
+        self.optimizer = optim.Adam(self.parameters(), lr=1e-6, weight_decay=1e-6)
         return self.optimizer
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        x1 = x1.to(self.device)
+        x2 = x2.to(self.device)
         bs = x1.size(0)
         z1 = self.projector(self.backbone(x1))
         z2 = self.projector(self.backbone(x2))
@@ -60,9 +54,14 @@ class BarlowTwins(nn.Module):
 
         c.div_(bs)
         on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
-        off_diag = off_diagnoal(c).pow_(2).sum()
+        off_diag = self.off_diagnoal(c).pow_(2).sum()
         loss = on_diag + self.lambd * off_diag
         return loss, on_diag, off_diag
+
+    @staticmethod
+    def off_diagnoal(x: torch.Tensor) -> torch.Tensor:
+        n = x.size(0)
+        return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
     def train_step(self, x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.optimizer.zero_grad()
@@ -85,7 +84,9 @@ class BarlowTwins(nn.Module):
             loss.update(_loss.item())
             on_diag.update(_on_diag.item())
             off_diag.update(_off_diag.item())
-            pbar.set_description(f"loss: {loss.average:.3f} on-diag: {on_diag.average} off-diag: {off_diag.average}")
+            pbar.set_description(
+                f"loss: {loss.average:.3f} on-diag: {on_diag.average:.3f} off-diag: {off_diag.average:.3f}"
+            )
             pbar.update()
         pbar.close()
         return loss.average, on_diag.average, off_diag.average
@@ -106,7 +107,9 @@ class BarlowTwins(nn.Module):
             loss.update(_loss.item())
             on_diag.update(_on_diag.item())
             off_diag.update(_off_diag.item())
-            pbar.set_description(f"loss: {loss.average:.3f} on-diag: {on_diag.average} off-diag: {off_diag.average}")
+            pbar.set_description(
+                f"loss: {loss.average:.3f} on-diag: {on_diag.average:.3f} off-diag: {off_diag.average:.3f}"
+            )
             pbar.update()
         pbar.close()
         return loss.average, on_diag.average, off_diag.average
@@ -128,6 +131,7 @@ class Transform:
                 transforms.RandomResizedCrop(
                     size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
                 ),
+                transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
@@ -142,9 +146,11 @@ class Transform:
     def configure_transform_prime(self) -> transforms.Compose:
         self.transform_prime = transforms.Compose(
             [
+                transforms.Lambda(lambd=lambda i: i / 255.0),
                 transforms.RandomResizedCrop(
                     size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
                 ),
+                transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
@@ -177,5 +183,5 @@ class Transform:
 
     def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x1 = self.transform(x)
-        x2 = self.transform(x)
+        x2 = self.transform_prime(x)
         return x1, x2
