@@ -1,11 +1,10 @@
-import random
-
+import numpy as np
 import torch
-from PIL import Image, ImageFilter, ImageOps
 from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.models import resnet50
+from torchvision.transforms.functional import InterpolationMode
 from tqdm.auto import tqdm
 
 from .utils import AverageMeter
@@ -113,47 +112,29 @@ class BarlowTwins(nn.Module):
         return loss.average, on_diag.average, off_diag.average
 
 
-class GaussianBlur:
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if random.random() < self.p:
-            sigma = random.random() * 1.9 + 0.1
-            return img.filter(ImageFilter.GaussianBlur(sigma))
-        else:
-            return img
-
-
-class Solarization:
-    def __init__(self, p):
-        self.p = p
-
-    def __call__(self, img):
-        if random.random() < self.p:
-            return ImageOps.solarize(img)
-        else:
-            return img
-
-
 class Transform:
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+
     def __init__(self, image_size: int = 128):
         self.image_size = image_size
+        self.transform = self.configure_transform()
+        self.transform_prime = self.configure_transform_prime()
 
     def configure_transform(self) -> transforms.Compose:
         self.transform = transforms.Compose(
             [
-                transforms.RandomResizedCrop(size=self.image_size, interpolation=Image.BICUBIC),
+                transforms.Lambda(lambd=lambda i: i / 255.0),
+                transforms.RandomResizedCrop(
+                    size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
+                ),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
                     [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)], p=0.8
                 ),
-                # transforms.RandomGrayscale(p-0.2),
-                transforms.GaussianBlur(p=1.0),
-                # Solarization(p=0.0),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                transforms.GaussianBlur(kernel_size=3),
+                transforms.Normalize(mean=self.mean, std=self.std),
             ]
         )
         return self.transform
@@ -161,20 +142,38 @@ class Transform:
     def configure_transform_prime(self) -> transforms.Compose:
         self.transform_prime = transforms.Compose(
             [
-                transforms.RandomResizedCrop(size=self.image_size, interpolation=Image.BICUBIC),
+                transforms.RandomResizedCrop(
+                    size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
+                ),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
                     [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)], p=0.8
                 ),
-                # transforms.RandomGrayscale(p=0.2),
-                GaussianBlur(p=0.1),
-                # Solarization(p=0.0),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                transforms.RandomApply(
+                    [
+                        transforms.GaussianBlur(kernel_size=3),
+                    ],
+                    p=0.1,
+                ),
+                transforms.RandomApply(
+                    [transforms.GaussianBlur(kernel_size=3)],
+                    p=0.2,
+                ),
+                transforms.Normalize(mean=self.mean, std=self.std),
             ]
         )
         return self.transform_prime
+
+    @classmethod
+    def denormalize(cls, x: torch.Tensor) -> torch.Tensor:
+        denorm = transforms.Compose(
+            [
+                transforms.Normalize(mean=[0.0, 0.0, 0.0], std=1 / cls.std),
+                transforms.Normalize(mean=-cls.mean, std=[1.0, 1.0, 1.0]),
+            ]
+        )
+        return denorm(x)
 
     def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x1 = self.transform(x)
