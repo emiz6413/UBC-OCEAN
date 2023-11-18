@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch import nn, optim
+from torch import nn
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.models import resnet50
@@ -39,7 +39,7 @@ class BarlowTwins(nn.Module):
         self.device = device
 
     def configure_optimizer(self) -> torch.optim.Optimizer:
-        self.optimizer = optim.Adam(self.parameters(), lr=1e-6, weight_decay=1e-6)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-6, weight_decay=1e-6)
         return self.optimizer
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -129,7 +129,7 @@ class Transform:
             [
                 transforms.Lambda(lambd=lambda i: i / 255.0),
                 transforms.RandomResizedCrop(
-                    size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
+                    size=self.image_size, scale=(0.25, 1), interpolation=InterpolationMode.BICUBIC
                 ),
                 transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
@@ -148,7 +148,7 @@ class Transform:
             [
                 transforms.Lambda(lambd=lambda i: i / 255.0),
                 transforms.RandomResizedCrop(
-                    size=self.image_size, scale=(0.5, 1), interpolation=InterpolationMode.BICUBIC
+                    size=self.image_size, scale=(0.25, 1), interpolation=InterpolationMode.BICUBIC
                 ),
                 transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
