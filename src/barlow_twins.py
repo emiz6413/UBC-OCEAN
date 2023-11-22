@@ -2,9 +2,12 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from torchvision import transforms
-from torchvision.models import resnet50
-from torchvision.transforms.functional import InterpolationMode
+from torchvision import transforms  # type: ignore[import-untyped]
+from torchvision.models import resnet50  # type: ignore[import-untyped]
+from torchvision.transforms.functional import (  # type: ignore[import-untyped]
+    InterpolationMode,
+    normalize,
+)
 from tqdm.auto import tqdm
 
 from .utils import AverageMeter
@@ -20,15 +23,18 @@ class BarlowTwins(nn.Module):
         device: torch.device = torch.device("cuda"),
     ) -> None:
         super().__init__()
-        self.backbone = resnet50(zero_init_residual=True)
-        self.backbone.fc = nn.Identity()  # 2048
+        self.backbone = self.configure_backbone()
         self.lambd = lambd
 
         self.projector = nn.Sequential(
             nn.Linear(in_features=2048, out_features=projector_dim, bias=False),
             nn.BatchNorm1d(num_features=projector_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=projector_dim, out_features=projector_dim, bias=False),
+            nn.Linear(
+                in_features=projector_dim,
+                out_features=projector_dim,
+                bias=False,
+            ),
             nn.BatchNorm1d(num_features=projector_dim),
             nn.ReLU(inplace=True),
             nn.Linear(in_features=projector_dim, out_features=latent_dim, bias=False),
@@ -38,9 +44,17 @@ class BarlowTwins(nn.Module):
         self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
         self.device = device
 
+    def configure_backbone(self) -> torch.nn.Module:
+        self.backbone = resnet50(zero_init_residual=True)
+        self.backbone.fc = nn.Identity()  # 2048
+        return self.backbone
+
     def configure_optimizer(self) -> torch.optim.Optimizer:
         self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-6, weight_decay=1e-6)
         return self.optimizer
+
+    def embed(self, x: torch.Tensor) -> torch.Tensor:
+        return self.projector(self.backbone(x))
 
     def forward(self, x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x1 = x1.to(self.device)
@@ -129,13 +143,23 @@ class Transform:
             [
                 transforms.Lambda(lambd=lambda i: i / 255.0),
                 transforms.RandomResizedCrop(
-                    size=self.image_size, scale=(0.25, 1), interpolation=InterpolationMode.BICUBIC
+                    size=self.image_size,
+                    scale=(0.25, 1),
+                    interpolation=InterpolationMode.BICUBIC,
                 ),
                 transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
-                    [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)], p=0.8
+                    [
+                        transforms.ColorJitter(
+                            brightness=0.4,
+                            contrast=0.4,
+                            saturation=0.2,
+                            hue=0.1,
+                        )
+                    ],
+                    p=0.8,
                 ),
                 transforms.GaussianBlur(kernel_size=3),
                 transforms.Normalize(mean=self.mean, std=self.std),
@@ -148,13 +172,23 @@ class Transform:
             [
                 transforms.Lambda(lambd=lambda i: i / 255.0),
                 transforms.RandomResizedCrop(
-                    size=self.image_size, scale=(0.25, 1), interpolation=InterpolationMode.BICUBIC
+                    size=self.image_size,
+                    scale=(0.25, 1),
+                    interpolation=InterpolationMode.BICUBIC,
                 ),
                 transforms.Lambda(lambd=lambda i: i.clamp(min=0, max=1)),
                 transforms.RandomVerticalFlip(p=0.5),
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomApply(
-                    [transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1)], p=0.8
+                    [
+                        transforms.ColorJitter(
+                            brightness=0.4,
+                            contrast=0.4,
+                            saturation=0.2,
+                            hue=0.1,
+                        )
+                    ],
+                    p=0.8,
                 ),
                 transforms.RandomApply(
                     [
@@ -172,14 +206,14 @@ class Transform:
         return self.transform_prime
 
     @classmethod
+    def normalize(cls, x: torch.Tensor) -> torch.Tensor:
+        return normalize(x, mean=cls.mean, std=cls.std)
+
+    @classmethod
     def denormalize(cls, x: torch.Tensor) -> torch.Tensor:
-        denorm = transforms.Compose(
-            [
-                transforms.Normalize(mean=[0.0, 0.0, 0.0], std=1 / cls.std),
-                transforms.Normalize(mean=-cls.mean, std=[1.0, 1.0, 1.0]),
-            ]
-        )
-        return denorm(x)
+        x = normalize(x, mean=[0.0, 0.0, 0.0], std=1 / cls.std)
+        x = normalize(x, mean=-cls.mean, std=[1.0, 1.0, 1.0])
+        return x
 
     def __call__(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x1 = self.transform(x)
