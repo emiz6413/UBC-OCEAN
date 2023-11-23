@@ -6,39 +6,9 @@ from torch import nn, optim
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
+from .utils import AverageMeter, HingeLoss
+
 LOSS_TYPE = Literal["BCE", "Hinge"]
-
-
-class HingeLoss(nn.Module):
-    def __init__(self, for_discriminator: bool) -> None:
-        super().__init__()
-        self.for_discriminator = for_discriminator
-
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if self.for_discriminator:
-            return self.compute_loss_for_discriminator(input, target)
-        else:
-            return self.compute_loss_for_generator(input, target)
-
-    @staticmethod
-    def compute_loss_for_discriminator(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if all(target == 1):
-            min_val = torch.min(input - 1, torch.zeros_like(input))
-            return -torch.mean(min_val)
-        elif all(target == 0):
-            min_val = torch.min(-input - 1, torch.zeros_like(input))
-            return -torch.mean(min_val)
-        else:
-            raise ValueError("invalid target value")
-
-    @staticmethod
-    def compute_loss_for_generator(input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if all(target == 1):
-            return -input.mean()
-        elif all(target == 0):
-            return input.mean()
-        else:
-            raise ValueError("invalid target value")
 
 
 class BiGAN(nn.Module):
@@ -48,7 +18,10 @@ class BiGAN(nn.Module):
         generator: nn.Module,
         discriminator: nn.Module,
         amp: bool = False,
+        eval_amp: bool = False,
         loss_type: LOSS_TYPE = "Hinge",
+        disc_iters: int = 2,
+        ge_iters: int = 1,
     ) -> None:
         super().__init__()
         self.encoder = encoder
@@ -62,14 +35,17 @@ class BiGAN(nn.Module):
         self.ge_optimizer = self.create_eg_optimizer()
         self.d_optimizer = self.create_d_optimizer()
         self.scaler = torch.cuda.amp.grad_scaler.GradScaler(enabled=amp)
+        self.eval_amp = eval_amp
+        self.disc_iters = disc_iters
+        self.ge_iters = ge_iters
 
-    def create_eg_optimizer(self, lr: float = 1e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+    def create_eg_optimizer(self, lr: float = 5e-5, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         self.ge_optimizer = optim.Adam(
             chain(self.encoder.parameters(), self.generator.parameters()), lr=lr, betas=betas
         )
         return self.ge_optimizer
 
-    def create_d_optimizer(self, lr: float = 3e-4, betas: tuple[float, float] = (0.5, 0.999)) -> optim.Optimizer:
+    def create_d_optimizer(self, lr: float = 2e-4, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         """
         Note: Setting Discriminator's learning rate larger converges faster
 
@@ -109,64 +85,83 @@ class BiGAN(nn.Module):
         return data_preds, sample_preds
 
     @torch.no_grad()
-    def evaluate(self, eval_loader: DataLoader) -> torch.Tensor:
-        rec_loss = []
+    def evaluate(self, eval_loader: DataLoader) -> float:
+        rec_loss_meter = AverageMeter()
         pbar = tqdm(total=len(eval_loader), leave=False)
         self.eval()
-        for x, _ in eval_loader:
-            reconstructed = self.reconstruct(x)
+        for x in eval_loader:
+            with torch.cuda.amp.autocast(enabled=self.eval_amp):
+                reconstructed = self.reconstruct(x)
             mse = nn.functional.mse_loss(input=reconstructed, target=x)
-            pbar.set_description(f"reconstruction loss: {mse.item():.3f}")
-            rec_loss.append(mse)
+            rec_loss_meter.update(mse.item())
+            pbar.set_description(f"reconstruction loss: {rec_loss_meter.average:.3f}")
             pbar.update()
         pbar.close()
-        return torch.mean(torch.tensor(rec_loss))
+        return rec_loss_meter.average
 
     def train_single_epoch(self, train_loader: DataLoader) -> tuple[float, float]:
-        ge_loss = 0.0
-        d_loss = 0.0
+        ge_loss_meter = AverageMeter()
+        d_loss_meter = AverageMeter()
         pbar = tqdm(total=len(train_loader), leave=False)
         self.train()
-        for x, _ in train_loader:
-            with torch.cuda.amp.autocast(enabled=self.scaler is not None, dtype=torch.float16):
-                _ge_loss, _d_loss = self.train_step(x)
-            pbar.set_description(
-                f"Generator/Encoder loss: {_ge_loss.item():.3f}. Discriminator loss: {_d_loss.item():.3f}"
-            )
-            ge_loss += _ge_loss.item()
-            d_loss += _d_loss.item()
+        d_iter = 0
+        ge_iter = 0
+        for x in train_loader:
+            if d_iter < self.disc_iters:
+                d_loss = self.train_disc(x)
+                d_loss_meter.update(d_loss.item())
+                d_iter += 1
+            else:
+                ge_loss = self.train_ge(x)
+                ge_loss_meter.update(ge_loss.item())
+                ge_iter += 1
+
+                if ge_iter == self.ge_iters:
+                    d_iter = 0
+                    ge_iter = 0
+
+            pbar.set_description(f"GE loss: {ge_loss_meter.average:.3f}. D loss: {d_loss_meter.average:.3f}")
             pbar.update()
         pbar.close()
 
-        return ge_loss / len(train_loader), d_loss / len(train_loader)
+        return ge_loss_meter.average, d_loss_meter.average
 
-    def train_step(self, x_real: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        y_real = torch.ones((x_real.size(0), 1), device=x_real.device)
-        y_fake = torch.zeros_like(y_real)
-
-        z_fake = torch.randn(x_real.size(0), self.latent_dim, 1, 1, device=x_real.device)
-        z_real = self.encode(x_real)  # keep the graph untouched while training discriminator
-
-        x_fake = self.generate(z_fake)  # keep the graph untouched while training discriminator
-
-        # 1. train the discriminator
+    def train_disc(self, x_real: torch.Tensor) -> torch.Tensor:
+        """Train the discriminator"""
         self.d_optimizer.zero_grad()
 
-        real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake.detach(), z_real.detach())
-        d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
+        y_real = torch.ones((x_real.size(0), 1), device=x_real.device)
+        y_fake = torch.zeros_like(y_real)
+        z_fake = torch.randn(x_real.size(0), self.latent_dim, 1, 1, device=x_real.device)
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            with torch.no_grad():
+                z_real = self.encode(x_real)
+                x_fake = self.generate(z_fake)
+
+            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
 
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.d_optimizer)
+        self.scaler.update()
+        return d_loss
 
-        # 2. train the encoder and generator
+    def train_ge(self, x_real: torch.Tensor) -> torch.Tensor:
+        """Train the generator and encoder"""
         self.ge_optimizer.zero_grad()
 
-        real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-        ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
+        y_real = torch.ones((x_real.size(0), 1), device=x_real.device)
+        y_fake = torch.zeros_like(y_real)
+        z_fake = torch.randn(x_real.size(0), self.latent_dim, 1, 1, device=x_real.device)
+
+        with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
+            z_real = self.encode(x_real)
+            x_fake = self.generate(z_fake)
+
+            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
 
         self.scaler.scale(ge_loss).backward()
         self.scaler.step(self.ge_optimizer)
-
         self.scaler.update()
-
-        return d_loss, ge_loss
+        return ge_loss
