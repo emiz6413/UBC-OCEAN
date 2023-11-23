@@ -27,3 +27,5 @@ Training procedure follows TTUR ([Heusel *et al.*, 2017](https://arxiv.org/abs/1
 * Encoder consists of five blocks of strided convolution, batch normalization and leaky rely followed by linear projection. Decoder consists of linear layer and five blocks of (nearest) upsampling, convolution, batch normalization and leaky relu.
 
 <img src="asset/epoch29_vae_reconstruted.png">
+<img src="asset/vae_training.png">
+
