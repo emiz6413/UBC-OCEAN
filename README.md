@@ -19,3 +19,11 @@ Training procedure follows TTUR ([Heusel *et al.*, 2017](https://arxiv.org/abs/1
 
 <img src="asset/epoch120_rec-loss0.309.png">
 
+
+# Results on UBCO
+
+#### VAE
+
+* Encoder consists of five blocks of strided convolution, batch normalization and leaky rely followed by linear projection. Decoder consists of linear layer and five blocks of (nearest) upsampling, convolution, batch normalization and leaky relu.
+
+<img src="asset/epoch29_vae_reconstruted.png">
