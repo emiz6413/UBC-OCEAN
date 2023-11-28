@@ -135,16 +135,23 @@ class DiscriminatorBlock(nn.Module):
             ),
             enabled=sn_enabled,
         )
-        self.activation = nn.LeakyReLU()
+        self.bn = nn.BatchNorm2d(num_features=out_channels)
+        self.activation = nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
     def forward(self, x: Tensor) -> Tensor:
         x = self.conv(x)
+        x = self.bn(x)
         x = self.activation(x)
         return x
 
 
 class Discriminator64(nn.Module):
-    def __init__(self, in_channels: int = 3, latent_dim: int = 128, sn_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        in_channels: int = 3,
+        latent_dim: int = 128,
+        sn_enabled: bool = False,
+    ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
         self.x_mapping = nn.Sequential(
@@ -205,6 +212,17 @@ class BiGAN(nn.Module):
         self.eval_amp = eval_amp
         self.disc_iters = disc_iters
         self.ge_iters = ge_iters
+        self.init_parameters()
+
+    def init_parameters(self) -> None:
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.Linear)):
+                nn.init.normal_(m.weight.data, 0.0, 0.02)
+                if hasattr(m, "bias") and m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+            elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                nn.init.normal_(m.weight.data, 1.0, 0.02)
+                nn.init.constant_(m.bias.data, 0.0)
 
     def create_eg_optimizer(self, lr: float = 5e-5, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         self.ge_optimizer = optim.Adam(
@@ -308,7 +326,9 @@ class BiGAN(nn.Module):
                 x_fake = self.generate(z_fake)
 
             real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-            d_loss: torch.Tensor = self.d_criterion(real_preds, y_real) + self.d_criterion(fake_preds, y_fake)
+            d_loss: torch.Tensor = self.d_criterion(real_preds.view(-1, 1), y_real) + self.d_criterion(
+                fake_preds.view(-1, 1), y_fake
+            )
 
         self.scaler.scale(d_loss).backward()
         self.scaler.step(self.d_optimizer)
@@ -328,7 +348,9 @@ class BiGAN(nn.Module):
             x_fake = self.generate(z_fake)
 
             real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
-            ge_loss: torch.Tensor = self.ge_criterion(fake_preds, y_real) + self.ge_criterion(real_preds, y_fake)
+            ge_loss: torch.Tensor = self.ge_criterion(fake_preds.view(-1, 1), y_real) + self.ge_criterion(
+                real_preds.view(-1, 1), y_fake
+            )
 
         self.scaler.scale(ge_loss).backward()
         self.scaler.step(self.ge_optimizer)
