@@ -308,8 +308,8 @@ class BiGAN(nn.Module):
         x = torch.cat([x, x_tilde], dim=0)
         z = torch.cat([z_hat, z], dim=0)
         output = self.discriminator(x, z)
-        data_preds, sample_preds = torch.tensor_split(output, 2, dim=0)
-        return data_preds, sample_preds
+        real_preds, tilde_preds = torch.tensor_split(output, 2, dim=0)
+        return real_preds, tilde_preds
 
     @torch.no_grad()
     def evaluate(self, eval_loader: DataLoader) -> float:
@@ -367,7 +367,7 @@ class BiGAN(nn.Module):
                 z_real = self.encode(x_real)
                 x_fake = self.generate(z_fake)
 
-            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            real_preds, fake_preds = self.discriminate(x_real, z_real, x_fake, z_fake)
             d_loss: torch.Tensor = self.d_criterion(real_preds.view(-1, 1), y_real) + self.d_criterion(
                 fake_preds.view(-1, 1), y_fake
             )
@@ -389,7 +389,7 @@ class BiGAN(nn.Module):
             z_real = self.encode(x_real)
             x_fake = self.generate(z_fake)
 
-            real_preds, fake_preds = self.discriminate(x_real, z_fake, x_fake, z_real)
+            real_preds, fake_preds = self.discriminate(x_real, z_real, x_fake, z_fake)
             ge_loss: torch.Tensor = self.ge_criterion(fake_preds.view(-1, 1), y_real) + self.ge_criterion(
                 real_preds.view(-1, 1), y_fake
             )
