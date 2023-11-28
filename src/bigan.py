@@ -122,6 +122,7 @@ class DiscriminatorBlock(nn.Module):
         padding: int = 1,
         bias: bool = True,
         sn_enabled: bool = False,
+        bn_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.conv = spectral_norm(
@@ -135,7 +136,7 @@ class DiscriminatorBlock(nn.Module):
             ),
             enabled=sn_enabled,
         )
-        self.bn = nn.BatchNorm2d(num_features=out_channels)
+        self.bn = nn.BatchNorm2d(num_features=out_channels) if bn_enabled else nn.Identity()
         self.activation = nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -151,27 +152,68 @@ class Discriminator64(nn.Module):
         in_channels: int = 3,
         latent_dim: int = 128,
         sn_enabled: bool = False,
+        bn_enabled: bool = False,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
         self.x_mapping = nn.Sequential(
-            DiscriminatorBlock(in_channles=in_channels, out_channels=64, sn_enabled=sn_enabled),  # 64 -> 32
-            DiscriminatorBlock(in_channles=64, out_channels=128, sn_enabled=sn_enabled),  # 32 -> 16
-            DiscriminatorBlock(in_channles=128, out_channels=256, sn_enabled=sn_enabled),  # 16 -> 8
-            DiscriminatorBlock(in_channles=256, out_channels=512, sn_enabled=sn_enabled),  # 8 -> 4
             DiscriminatorBlock(
-                in_channles=512, out_channels=1024, stride=1, padding=0, sn_enabled=sn_enabled
+                in_channles=in_channels, out_channels=64, sn_enabled=sn_enabled, bn_enabled=bn_enabled
+            ),  # 64 -> 32
+            DiscriminatorBlock(
+                in_channles=64, out_channels=128, sn_enabled=sn_enabled, bn_enabled=bn_enabled
+            ),  # 32 -> 16
+            DiscriminatorBlock(
+                in_channles=128, out_channels=256, sn_enabled=sn_enabled, bn_enabled=bn_enabled
+            ),  # 16 -> 8
+            DiscriminatorBlock(
+                in_channles=256, out_channels=512, sn_enabled=sn_enabled, bn_enabled=bn_enabled
+            ),  # 8 -> 4
+            DiscriminatorBlock(
+                in_channles=512, out_channels=1024, stride=1, padding=0, sn_enabled=sn_enabled, bn_enabled=bn_enabled
             ),  # 4 -> 1
         )
 
         self.z_mapping = nn.Sequential(
-            DiscriminatorBlock(in_channles=latent_dim, out_channels=512, kernel_size=1, stride=1, padding=0),
-            DiscriminatorBlock(in_channles=512, out_channels=512, kernel_size=1, stride=1, padding=0),
+            DiscriminatorBlock(
+                in_channles=latent_dim,
+                out_channels=512,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            DiscriminatorBlock(
+                in_channles=512,
+                out_channels=512,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
         )
 
         self.joint_mapping = nn.Sequential(
-            DiscriminatorBlock(in_channles=1024 + 512, out_channels=2048, kernel_size=1, stride=1, padding=0),
-            DiscriminatorBlock(in_channles=2048, out_channels=2048, kernel_size=1, stride=1, padding=0),
+            DiscriminatorBlock(
+                in_channles=1024 + 512,
+                out_channels=2048,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            DiscriminatorBlock(
+                in_channles=2048,
+                out_channels=2048,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
             nn.Conv2d(in_channels=2048, out_channels=1, kernel_size=1),
         )
 
