@@ -122,7 +122,7 @@ class DiscriminatorBlock(nn.Module):
         padding: int = 1,
         bias: bool = True,
         sn_enabled: bool = False,
-        bn_enabled: bool = False,
+        bn_enabled: bool = True,
     ) -> None:
         super().__init__()
         self.conv = spectral_norm(
@@ -152,7 +152,7 @@ class Discriminator64(nn.Module):
         in_channels: int = 3,
         latent_dim: int = 128,
         sn_enabled: bool = False,
-        bn_enabled: bool = False,
+        bn_enabled: bool = True,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
