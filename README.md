@@ -9,17 +9,17 @@ This repository was developped for a kaggle competition ["UBC-OCEAN"](https://ww
 Three methods of encoders are compared in my experiments.
 
 ### Variational Auto Encoder (VAE)
+A vanilla VAE was trained on images of 128x128 pixels.
+<img src="asset/epoch29_vae_reconstruted.png">
 
 ### Contrastive Learning (CL)
 
 ### Bidirectional Generative Adversarial Network (BiGAN)
-Network architecture and training procedure are based on BigGAN ([Brock *et al.*, 2018](https://arxiv.org/abs/1809.11096)) with some modifications. Encoder and generator employ self-attention layer ([Zhang *et al.* 2018](https://arxiv.org/abs/1805.08318)) while only discriminator are normalized by spectral normalization ([Miyato *et al.*, 2018](https://arxiv.org/abs/1802.05957)).
+Network architecture and training procedure are based on BiGAN ([Donahue *et al.*, 2016](https://arxiv.org/abs/1605.09782)) with some modifications. Operations in the discriminator are normalized by spectral normalization ([Miyato *et al.*, 2018](https://arxiv.org/abs/1802.05957)).
 Training procedure follows TTUR ([Heusel *et al.*, 2017](https://arxiv.org/abs/1706.08500)) discriminator is updated twice per generator/encoder update with twice as large learning rate.
 
-# Preliminary results
-
-### BiGAN on SVHN
-
-| generated | reconstructed |
-| - | - |
-| <img src="asset/svhn_generated.png"> | <img src="asset/svhn_reconstructed.png"> |
+### Preliminary results
+#### BiGAN on celebA dataset
+* Trained for 90 epochs with batch size 128
+* Reconstructed images correspond to the original images
+<img src="asset/bigan_celeba.png">
