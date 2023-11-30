@@ -3,6 +3,13 @@ import torch
 from scipy.stats import truncnorm  # type: ignore
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.utils.parametrizations import spectral_norm as _spectral_norm
+
+
+def spectral_norm(module: nn.Module, enabled: bool = True) -> nn.Module:
+    if enabled:
+        module = _spectral_norm(module)
+    return module
 
 
 def truncated_z_sample(batch_size: int, z_dim: int, truncation: float = 0.5, seed: int | None = None):

@@ -2,7 +2,8 @@ from typing import ClassVar
 
 import torch
 from torch import nn
-from torch.nn.utils.parametrizations import spectral_norm
+
+from .utils import spectral_norm
 
 
 class EncoderBlock(nn.Module):
@@ -59,7 +60,8 @@ class SNDiscriminatorBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.conv = spectral_norm(
-            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True)
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=padding, bias=True),
+            enabled=True,
         )
         self.activation = nn.ReLU(inplace=True)
 

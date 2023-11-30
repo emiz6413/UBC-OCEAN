@@ -3,13 +3,8 @@ from functools import partial
 import torch
 from torch import nn
 from torch.nn import functional as F
-from torch.nn.utils.parametrizations import spectral_norm as _spectral_norm
 
-
-def spectral_norm(module: nn.Module, enabled: bool = True) -> nn.Module:
-    if enabled:
-        module = _spectral_norm(module)
-    return module
+from .utils import spectral_norm
 
 
 class SelfAttention(nn.Module):

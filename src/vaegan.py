@@ -4,11 +4,10 @@ import numpy as np
 import torch
 from torch import Tensor, nn, optim
 from torch.nn import functional as F
-from torch.nn.utils.parametrizations import spectral_norm as _spectral_norm
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .utils import AverageMeter
+from .utils import AverageMeter, spectral_norm
 
 T = TypeVar("T")
 
@@ -28,12 +27,6 @@ class VaeGanOutput(NamedTuple):
     kl_loss: Tensor
     gan_loss: GanLoss
     log_like_loss: Tensor
-
-
-def spectral_norm(module: T, enabled: bool = True, **kwargs) -> T:
-    if not enabled:
-        return module
-    return _spectral_norm(module=module, **kwargs)  # type: ignore
 
 
 class EncoderBlock(nn.Module):
@@ -72,10 +65,10 @@ class EncoderBlock(nn.Module):
 
 class DiscriminatorBlock(EncoderBlock):
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:  # type: ignore[override]
-        after_conv = self.conv(x)
-        x = self.bn(after_conv)
+        intermediate = self.conv(x)
+        x = self.bn(intermediate)
         x = self.activation(x)
-        return x, after_conv
+        return x, intermediate
 
 
 class DecoderBlock(nn.Module):
@@ -153,6 +146,15 @@ class Encoder64(nn.Module):
         return mu, logvar
 
 
+class Encoder32(Encoder64):
+    def __init__(self, latent_dim: int = 128, in_channels: int = 3, sn_enabled: bool = False) -> None:
+        super().__init__(latent_dim, in_channels, sn_enabled)
+        self.blocks = nn.Sequential(
+            EncoderBlock(in_channels=in_channels, out_channels=64, sn_enabled=sn_enabled),  # 32 -> 16
+            EncoderBlock(in_channels=64, out_channels=256, sn_enabled=sn_enabled),  # 16 -> 8
+        )
+
+
 class Decoder64(nn.Module):
     def __init__(
         self,
@@ -194,6 +196,15 @@ class Decoder64(nn.Module):
         x = self.blocks(x)
         x = self.final_conv(x)
         return x
+
+
+class Decoder32(Decoder64):
+    def __init__(self, latent_dim: int = 128, out_channels: int = 3, sn_enabled: bool = False) -> None:
+        super().__init__(latent_dim, out_channels, sn_enabled)
+        self.blocks = nn.Sequential(
+            DecoderBlock(in_channels=256, out_channels=128, sn_enabled=sn_enabled),  # 8 -> 16
+            DecoderBlock(in_channels=128, out_channels=32, sn_enabled=sn_enabled),  # 16 -> 32
+        )
 
 
 class Discriminator64(nn.Module):
@@ -238,12 +249,24 @@ class Discriminator64(nn.Module):
         return x, intermediate
 
 
-class VAEGAN(nn.Module):
+class Discriminator32(Discriminator64):
+    def __init__(self, in_channels: int = 3, sn_enabled: bool = False) -> None:
+        super().__init__(in_channels, sn_enabled)
+        self.blocks = nn.ModuleList(
+            [
+                DiscriminatorBlock(in_channels=32, out_channels=128, sn_enabled=sn_enabled),
+                DiscriminatorBlock(in_channels=128, out_channels=256, sn_enabled=sn_enabled),
+            ]
+        )
+
+
+class VaeGan(nn.Module):
     def __init__(
         self,
         encoder: nn.Module,
         decoder: nn.Module,
         discriminator: nn.Module,
+        device: torch.device = torch.device("cpu"),
         equilibrium: float = 0.68,
         margin: float = 0.4,
         rec_vs_gan_w: float = 1e-2,
@@ -252,6 +275,7 @@ class VAEGAN(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.discriminator = discriminator
+        self.device = device
         self.equilibrium = equilibrium
         self.margin = margin
         self.rec_vs_gan_w = rec_vs_gan_w
@@ -290,9 +314,11 @@ class VAEGAN(nn.Module):
     def reparameterize(self, mu: Tensor, log_var: Tensor) -> Tensor:
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
-        return eps * std + mu
+        z = eps * std + mu
+        return z
 
     def forward(self, x: Tensor) -> VaeGanOutput:
+        x = x.to(self.device)
         mu, log_var = self.encoder(x)
         z = self.reparameterize(mu, log_var)
         x_tilde = self.decoder(z)
@@ -301,13 +327,14 @@ class VAEGAN(nn.Module):
         z_p = torch.randn_like(z)
         x_p = self.decoder(z_p)
 
-        d_real, d_l_real = self.discriminator(x)
-        d_p, d_l_p = self.discriminator(x_p)
-        d_tilde, d_l_tilde = self.discriminator(x_tilde)
+        x_concat = torch.concat([x, x_p, x_tilde], dim=0)
+        d_prob, d_layer = self.discriminator(x_concat)
+        d_real, d_p, d_tilde = torch.split(d_prob, [x.size(0)] * 3, dim=0)
+        d_l_real, d_l_p, d_l_tilde = torch.split(d_layer, [x.size(0)] * 3, dim=0)
 
         kl_loss = self.compute_kl_loss(mu, log_var)
         gan_loss = self.compute_gan_loss(d_real, d_p, d_tilde)
-        log_like_loss = self.compute_llike_loss(d_l_real, d_l_tilde)
+        log_like_loss = self.compute_llike_loss(d_l_real, d_l_tilde, d_l_p)
 
         return VaeGanOutput(rec_loss=rec, kl_loss=kl_loss, gan_loss=gan_loss, log_like_loss=log_like_loss)
 
@@ -325,10 +352,13 @@ class VAEGAN(nn.Module):
         return GanLoss(loss_real=loss_real, loss_p=loss_p, loss_tilde=loss_tilde)
 
     @staticmethod
-    def compute_llike_loss(dis_l_x: Tensor, dis_l_x_tilde: Tensor) -> Tensor:
+    def compute_llike_loss(dis_l_x: Tensor, dis_l_x_tilde: Tensor, dis_l_x_p: Tensor) -> Tensor:
         # p(Dis_l(x) | z) = N(Dis_l(x) | Dis_l(x_tilde), I)
         # log p(Dis_l(x) | z) ∝ 0.5 * (Dis_l(x) - Dis_l(x_tilde))^2
-        return 0.5 * F.mse_loss(dis_l_x, dis_l_x_tilde, reduction="mean")
+        mse_x_tilde = 0.5 * F.mse_loss(dis_l_x, dis_l_x_tilde, reduction="mean")
+        mse_x_p = 0.5 * F.mse_loss(dis_l_x, dis_l_x_p, reduction="mean")  # this is not mentioned in the paper
+        mse_sum = mse_x_tilde + mse_x_p
+        return mse_sum
 
     def train_step(self, x: Tensor) -> VaeGanOutput:
         losses = self.forward(x)
@@ -358,8 +388,8 @@ class VAEGAN(nn.Module):
         if train_dec:
             self.decoder_optimizer.zero_grad()
             losses = self.forward(x)
-            gan_loss = losses.gan_loss.loss_real + losses.gan_loss.loss_p + losses.gan_loss.loss_tilde
-            dec_loss = self.rec_vs_gan_w * losses.kl_loss - (1 - self.rec_vs_gan_w) * gan_loss
+            dec_gan_loss = -(losses.gan_loss.loss_p + losses.gan_loss.loss_tilde)
+            dec_loss = self.rec_vs_gan_w * losses.log_like_loss + (1 - self.rec_vs_gan_w) * dec_gan_loss
             dec_loss.backward()
             self.decoder_optimizer.step()
 
@@ -367,8 +397,8 @@ class VAEGAN(nn.Module):
         if train_disc:
             self.discriminator_optimizer.zero_grad()
             losses = self.forward(x)
-            gan_loss = losses.gan_loss.loss_real + losses.gan_loss.loss_p + losses.gan_loss.loss_tilde
-            gan_loss.backward()
+            disc_loss = losses.gan_loss.loss_real + losses.gan_loss.loss_p + losses.gan_loss.loss_tilde
+            disc_loss.backward()
             self.discriminator_optimizer.step()
 
         return losses
@@ -412,6 +442,7 @@ class VAEGAN(nn.Module):
                 f"gan loss p: {g_loss_p.average:.3f}\n"
                 f"gan loss tilde: {g_loss_tilde.average:.3f}\n"
             )
+            pbar.update()
         pbar.close()
         out = VaeGanOutput(
             rec_loss=torch.Tensor([rec_loss.average]),

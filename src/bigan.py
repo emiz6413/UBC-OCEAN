@@ -3,19 +3,12 @@ from typing import Literal
 
 import torch
 from torch import Tensor, nn, optim
-from torch.nn.utils.parametrizations import spectral_norm as _spectral_norm
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from .utils import AverageMeter, HingeLoss
+from .utils import AverageMeter, HingeLoss, spectral_norm
 
 LOSS_TYPE = Literal["BCE", "Hinge"]
-
-
-def spectral_norm(module: nn.Module, enabled: bool = True) -> nn.Module:
-    if enabled:
-        module = _spectral_norm(module)
-    return module
 
 
 class EncoderBlock(nn.Module):
