@@ -1,3 +1,5 @@
+from typing import TypeVar
+
 import numpy as np
 import torch
 from scipy.stats import truncnorm  # type: ignore
@@ -5,8 +7,10 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.parametrizations import spectral_norm as _spectral_norm
 
+T = TypeVar("T")
 
-def spectral_norm(module: nn.Module, enabled: bool = True) -> nn.Module:
+
+def spectral_norm(module: T, enabled: bool = True) -> T:
     if enabled:
         module = _spectral_norm(module)
     return module
