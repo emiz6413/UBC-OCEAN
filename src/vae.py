@@ -70,14 +70,10 @@ class Encoder128(nn.Module):
         self.blocks = nn.Sequential()
         in_channels = 3
         for out_channel in out_channels:
-            self.blocks.append(
-                EncoderBlock(in_channels=in_channels, out_channels=out_channel)
-            )
+            self.blocks.append(EncoderBlock(in_channels=in_channels, out_channels=out_channel))
             in_channels = out_channel
 
-        self.linear1 = nn.Linear(
-            in_features=out_channel * 4 * 4, out_features=512
-        )
+        self.linear1 = nn.Linear(in_features=out_channel * 4 * 4, out_features=512)
         self.bn = nn.BatchNorm1d(num_features=512)
         self.activation = nn.LeakyReLU(inplace=True)
         self.linear2 = nn.Linear(in_features=512, out_features=latent_dim)
@@ -108,9 +104,7 @@ class Decoder128(nn.Module):
         self.blocks = nn.Sequential()
         in_channels = 512
         for out_channel in out_channels:
-            self.blocks.append(
-                DecoderBlock(in_channels=in_channels, out_channels=out_channel)
-            )
+            self.blocks.append(DecoderBlock(in_channels=in_channels, out_channels=out_channel))
             in_channels = out_channel
 
         self.final_conv = nn.Sequential(
@@ -166,17 +160,13 @@ class VanillaVAE(nn.Module):
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         return self.decoder(z)
 
-    def reparameterize(
-        self, mu: torch.Tensor, log_var: torch.Tensor
-    ) -> torch.Tensor:
+    def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * log_var)
-        eps = torch.rand_like(std)
+        eps = torch.randn_like(std)
 
         return mu + eps * std
 
-    def forward(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = x.to(self.device)
         mu, log_var = self.encode(x)
         z = self.reparameterize(mu, log_var)
@@ -191,18 +181,14 @@ class VanillaVAE(nn.Module):
         log_var: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         x = x.to(x_hat.device)
-        rec_loss = nn.functional.mse_loss(
-            input=x_hat, target=x, reduction="mean"
-        )
+        rec_loss = nn.functional.mse_loss(input=x_hat, target=x, reduction="mean")
 
         kl_loss = -0.5 * torch.sum(1 + log_var - mu**2 - log_var.exp(), dim=1)
         kl_loss = torch.mean(kl_loss)
 
         return rec_loss, kl_loss
 
-    def train_step(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def train_step(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self.optimizer.zero_grad()
         with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
             x_hat, mu, log_var = self.forward(x)
@@ -214,18 +200,14 @@ class VanillaVAE(nn.Module):
         return loss, rec_loss, kl_loss
 
     @torch.no_grad()
-    def eval_step(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def eval_step(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         with torch.cuda.amp.autocast(enabled=self.scaler.is_enabled()):
             x_hat, mu, log_var = self.forward(x)
             rec_loss, kl_loss = self.compute_losses(x, x_hat, mu, log_var)
             loss = rec_loss + self.kl_w * kl_loss
         return loss, rec_loss, kl_loss
 
-    def train_single_epoch(
-        self, data_loader: DataLoader
-    ) -> tuple[float, float, float]:
+    def train_single_epoch(self, data_loader: DataLoader) -> tuple[float, float, float]:
         self.train()
         loss = AverageMeter()
         rec_loss = AverageMeter()
