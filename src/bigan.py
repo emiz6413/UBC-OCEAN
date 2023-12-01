@@ -8,8 +8,6 @@ from tqdm.auto import tqdm
 
 from .utils import AverageMeter, HingeLoss, spectral_norm
 
-LOSS_TYPE = Literal["BCE", "Hinge"]
-
 
 class EncoderBlock(nn.Module):
     def __init__(
@@ -57,6 +55,24 @@ class Encoder64(nn.Module):
         return self.layers(x)
 
 
+class Encoder128(nn.Module):
+    def __init__(self, latent_dim: int = 128, in_channels: int = 3) -> None:
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.layers = nn.Sequential(
+            EncoderBlock(in_channels=in_channels, out_channels=64),  # 128 -> 64
+            EncoderBlock(in_channels=64, out_channels=128),  # 64 -> 32
+            EncoderBlock(in_channels=128, out_channels=256),  # 32 -> 16
+            EncoderBlock(in_channels=256, out_channels=512),  # 16 -> 8
+            EncoderBlock(in_channels=512, out_channels=1024),  # 8 -> 4
+            EncoderBlock(in_channels=1024, out_channels=2048, stride=1, padding=0),  # 4 -> 1
+            nn.Conv2d(in_channels=2048, out_channels=latent_dim, kernel_size=1),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.layers(x)
+
+
 class GeneratorBlock(nn.Module):
     def __init__(
         self,
@@ -98,6 +114,26 @@ class Generator64(nn.Module):
             nn.ConvTranspose2d(
                 in_channels=128, out_channels=out_channels, kernel_size=4, stride=2, padding=1, bias=False
             ),  # 32 -> 64
+            nn.Tanh(),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.layers(x)
+
+
+class Generator128(nn.Module):
+    def __init__(self, latent_dim: int = 128, out_channels: int = 3) -> None:
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.layers = nn.Sequential(
+            GeneratorBlock(in_channles=latent_dim, out_channels=1024, stride=1, padding=0),  # 1 -> 4
+            GeneratorBlock(in_channles=1024, out_channels=512),  # 4 -> 8
+            GeneratorBlock(in_channles=512, out_channels=256),  # 8 -> 16
+            GeneratorBlock(in_channles=256, out_channels=128),  # 16 -> 32
+            GeneratorBlock(in_channles=128, out_channels=64),  # 32 -> 64
+            nn.ConvTranspose2d(
+                in_channels=64, out_channels=out_channels, kernel_size=4, stride=2, padding=1, bias=False
+            ),  # 64 -> 128
             nn.Tanh(),
         )
 
@@ -179,7 +215,7 @@ class Discriminator64(nn.Module):
             ),
             DiscriminatorBlock(
                 in_channles=512,
-                out_channels=512,
+                out_channels=1024,
                 kernel_size=1,
                 stride=1,
                 padding=0,
@@ -190,7 +226,86 @@ class Discriminator64(nn.Module):
 
         self.joint_mapping = nn.Sequential(
             DiscriminatorBlock(
-                in_channles=1024 + 512,
+                in_channles=1024 + 1024,
+                out_channels=2048,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            DiscriminatorBlock(
+                in_channles=2048,
+                out_channels=2048,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            nn.Conv2d(in_channels=2048, out_channels=1, kernel_size=1),
+        )
+
+    def forward(self, x: Tensor, z: Tensor) -> Tensor:
+        x = self.x_mapping(x)
+        z = self.z_mapping(z)
+        joint = torch.concat((x, z), dim=1)
+        joint = self.joint_mapping(joint)
+        return joint
+
+
+class Discriminator128(nn.Module):
+    def __init__(
+        self,
+        in_channels: int = 3,
+        latent_dim: int = 128,
+        sn_enabled: bool = False,
+        bn_enabled: bool = True,
+    ) -> None:
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.x_mapping = nn.Sequential(
+            DiscriminatorBlock(in_channels, 64, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 128 -> 64
+            DiscriminatorBlock(64, 128, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 64 -> 32
+            DiscriminatorBlock(128, 256, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 32 -> 16
+            DiscriminatorBlock(256, 512, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 16 -> 8
+            DiscriminatorBlock(512, 1024, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 8 -> 4
+            DiscriminatorBlock(1024, 2048, stride=1, padding=0, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 4 -> 1
+        )
+
+        self.z_mapping = nn.Sequential(
+            DiscriminatorBlock(
+                in_channles=latent_dim,
+                out_channels=256,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            DiscriminatorBlock(
+                in_channles=256,
+                out_channels=512,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+            DiscriminatorBlock(
+                in_channles=512,
+                out_channels=1024,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                sn_enabled=sn_enabled,
+                bn_enabled=bn_enabled,
+            ),
+        )
+
+        self.joint_mapping = nn.Sequential(
+            DiscriminatorBlock(
+                in_channles=2048 + 1024,
                 out_channels=2048,
                 kernel_size=1,
                 stride=1,
@@ -227,7 +342,7 @@ class BiGAN(nn.Module):
         device: torch.device = torch.device("cpu"),
         amp: bool = False,
         eval_amp: bool = False,
-        loss_type: LOSS_TYPE = "Hinge",
+        loss_type: Literal["BCE", "Hinge"] = "Hinge",
         disc_iters: int = 2,
         ge_iters: int = 1,
     ) -> None:
