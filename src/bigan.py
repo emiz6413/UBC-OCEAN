@@ -142,6 +142,16 @@ class Generator128(nn.Module):
 
 
 class DiscriminatorBlock(nn.Module):
+    """Discriminator Block
+
+    Note:
+        conv2d in the discriminator is normalized by spectral normalization which significantly stabilizes training
+
+    .. _Spectral Normalization for Generative Adversarial Networks:
+        Miyato et al., (2018)
+        https://arxiv.org/abs/1802.05957
+    """
+
     def __init__(
         self,
         in_channles: int,
@@ -382,9 +392,12 @@ class BiGAN(nn.Module):
 
     def create_d_optimizer(self, lr: float = 2e-4, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         """
-        Note: Setting Discriminator's learning rate larger converges faster
+        Note:
+            Setting Discriminator's learning rate larger converges faster
 
-        .. Heusel et al. (2017) https://arxiv.org/abs/1706.08500
+        .. _GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium (TTUR):
+            Heusel et al. (2017)
+            https://arxiv.org/abs/1706.08500
         """
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=lr, betas=betas)
         return self.d_optimizer
