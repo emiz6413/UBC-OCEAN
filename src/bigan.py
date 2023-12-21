@@ -65,8 +65,7 @@ class Encoder128(nn.Module):
             EncoderBlock(in_channels=128, out_channels=256),  # 32 -> 16
             EncoderBlock(in_channels=256, out_channels=512),  # 16 -> 8
             EncoderBlock(in_channels=512, out_channels=1024),  # 8 -> 4
-            EncoderBlock(in_channels=1024, out_channels=2048, stride=1, padding=0),  # 4 -> 1
-            nn.Conv2d(in_channels=2048, out_channels=latent_dim, kernel_size=1),
+            EncoderBlock(in_channels=1024, out_channels=latent_dim, stride=1, padding=0),  # 4 -> 1
         )
 
     def forward(self, x: Tensor) -> Tensor:
@@ -125,23 +124,34 @@ class Generator128(nn.Module):
     def __init__(self, latent_dim: int = 128, out_channels: int = 3) -> None:
         super().__init__()
         self.latent_dim = latent_dim
+        self.fc = nn.Conv2d(latent_dim, 8 * 8 * 1024, kernel_size=1)
         self.layers = nn.Sequential(
-            GeneratorBlock(in_channles=latent_dim, out_channels=1024, stride=1, padding=0),  # 1 -> 4
-            GeneratorBlock(in_channles=1024, out_channels=512),  # 4 -> 8
-            GeneratorBlock(in_channles=512, out_channels=256),  # 8 -> 16
-            GeneratorBlock(in_channles=256, out_channels=128),  # 16 -> 32
-            GeneratorBlock(in_channles=128, out_channels=64),  # 32 -> 64
-            nn.ConvTranspose2d(
-                in_channels=64, out_channels=out_channels, kernel_size=4, stride=2, padding=1, bias=False
-            ),  # 64 -> 128
+            GeneratorBlock(in_channles=1024, out_channels=512),  # 8 -> 16
+            GeneratorBlock(in_channles=512, out_channels=256),  # 16 -> 32
+            GeneratorBlock(in_channles=256, out_channels=128),  # 32 -> 64
+            GeneratorBlock(in_channles=128, out_channels=64),  # 64 -> 128
+            nn.Conv2d(in_channels=64, out_channels=out_channels, kernel_size=3, padding=1, bias=False),  # 128 -> 128
             nn.Tanh(),
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.layers(x)
+        x = self.fc(x)
+        x = x.view(-1, 1024, 8, 8)
+        x = self.layers(x)
+        return x
 
 
 class DiscriminatorBlock(nn.Module):
+    """Discriminator Block
+
+    Note:
+        conv2d in the discriminator is normalized by spectral normalization which significantly stabilizes training
+
+    .. _Spectral Normalization for Generative Adversarial Networks:
+        Miyato et al., (2018)
+        https://arxiv.org/abs/1802.05957
+    """
+
     def __init__(
         self,
         in_channles: int,
@@ -270,7 +280,7 @@ class Discriminator128(nn.Module):
             DiscriminatorBlock(128, 256, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 32 -> 16
             DiscriminatorBlock(256, 512, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 16 -> 8
             DiscriminatorBlock(512, 1024, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 8 -> 4
-            DiscriminatorBlock(1024, 2048, stride=1, padding=0, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 4 -> 1
+            DiscriminatorBlock(1024, 1024, stride=1, padding=0, sn_enabled=sn_enabled, bn_enabled=bn_enabled),  # 4 -> 1
         )
 
         self.z_mapping = nn.Sequential(
@@ -305,7 +315,7 @@ class Discriminator128(nn.Module):
 
         self.joint_mapping = nn.Sequential(
             DiscriminatorBlock(
-                in_channles=2048 + 1024,
+                in_channles=1024 + 1024,
                 out_channels=2048,
                 kernel_size=1,
                 stride=1,
@@ -315,14 +325,14 @@ class Discriminator128(nn.Module):
             ),
             DiscriminatorBlock(
                 in_channles=2048,
-                out_channels=2048,
+                out_channels=1024,
                 kernel_size=1,
                 stride=1,
                 padding=0,
                 sn_enabled=sn_enabled,
                 bn_enabled=bn_enabled,
             ),
-            nn.Conv2d(in_channels=2048, out_channels=1, kernel_size=1),
+            nn.Conv2d(in_channels=1024, out_channels=1, kernel_size=1),
         )
 
     def forward(self, x: Tensor, z: Tensor) -> Tensor:
@@ -382,9 +392,12 @@ class BiGAN(nn.Module):
 
     def create_d_optimizer(self, lr: float = 2e-4, betas: tuple[float, float] = (0.0, 0.999)) -> optim.Optimizer:
         """
-        Note: Setting Discriminator's learning rate larger converges faster
+        Note:
+            Setting Discriminator's learning rate larger converges faster
 
-        .. Heusel et al. (2017) https://arxiv.org/abs/1706.08500
+        .. _GANs Trained by a Two Time-Scale Update Rule Converge to a Local Nash Equilibrium (TTUR):
+            Heusel et al. (2017)
+            https://arxiv.org/abs/1706.08500
         """
         self.d_optimizer = optim.Adam(self.discriminator.parameters(), lr=lr, betas=betas)
         return self.d_optimizer
