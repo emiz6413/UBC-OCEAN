@@ -3,6 +3,8 @@ import math
 import numpy as np
 import torch
 from torch import Tensor, nn, optim
+from torch.cuda.amp.autocast_mode import autocast
+from torch.cuda.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 from torchvision.models.convnext import CNBlock  # type: ignore[import-untyped]
 from tqdm.auto import tqdm
@@ -45,6 +47,7 @@ class CNN(nn.Module):
         num_classes: int,
         num_pools: tuple[int, ...] = (1, 4, 16),
         device: torch.device = torch.device("cuda"),
+        amp: bool = True,
     ) -> None:
         super().__init__()
         self.stages = nn.Sequential(
@@ -59,6 +62,7 @@ class CNN(nn.Module):
         )
         self.optimizer = self.configure_optimizer()
         self.criterion = self.configure_criterion()
+        self.scaler = GradScaler(enabled=amp)
         if device is None:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.device = device
@@ -80,9 +84,13 @@ class CNN(nn.Module):
         return x
 
     def train_step(self, x: Tensor, label: Tensor) -> tuple[Tensor, Tensor]:
-        pred = self.forward(x)
-        loss = self.criterion(input=pred, target=label.to(pred.device))
-        loss.backward()
+        self.optimizer.zero_grad()
+        with autocast(enabled=self.scaler.is_enabled()):
+            pred = self.forward(x)
+            loss = self.criterion(input=pred, target=label.to(pred.device))
+        self.scaler.scale(loss).backward()
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
         return loss, pred
 
     @torch.no_grad()
@@ -95,13 +103,13 @@ class CNN(nn.Module):
         preds = []
         labels = []
         loss = AverageMeter()
-        pbar = tqdm(data_loader)
+        pbar = tqdm(data_loader, leave=False)
         for x, label in pbar:
             _loss, pred = self.train_step(x, label)
             loss.update(_loss.item())
             preds.append(pred.detach().cpu().numpy())
             labels.append(label.numpy())
-            pbar.set_description(f"loss: {loss.average:.3f}")
+            pbar.set_description(f"train loss: {loss.average:.3f}")
 
         return loss.average, np.concatenate(preds, axis=0), np.concatenate(labels, axis=0)
 
@@ -109,12 +117,12 @@ class CNN(nn.Module):
         preds = []
         labels = []
         loss = AverageMeter()
-        pbar = tqdm(data_loader)
+        pbar = tqdm(data_loader, leave=False)
         for x, label in pbar:
             _loss, pred = self.eval_step(x, label)
             loss.update(_loss.item())
             preds.append(pred.cpu().numpy())
             labels.append(label.numpy())
-            pbar.set_description(f"loss: {loss.average:.3f}")
+            pbar.set_description(f"eval loss: {loss.average:.3f}")
 
         return loss.average, np.concatenate(preds, axis=0), np.concatenate(labels, axis=0)
