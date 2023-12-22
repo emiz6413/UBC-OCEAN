@@ -26,7 +26,7 @@ class SpatialPyramidPooling(nn.Module):
         if mode == "max":
             pool_func = nn.AdaptiveMaxPool2d
         elif mode == "avg":
-            pool_func = nn.AdaptiveAvgPool2d  # type: ignore
+            pool_func = nn.AdaptiveAvgPool2d
         else:
             raise NotImplementedError
         self.poolers = nn.ModuleList()
