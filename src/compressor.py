@@ -1,6 +1,5 @@
 import math
 
-import numpy as np
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -41,7 +40,7 @@ class PatchedImage(Dataset):
         return F.pad(patch, pad, value=self.pad_value)
 
 
-class Comporessor:
+class Compressor:
     def __init__(
         self,
         encoder: nn.Module,
@@ -55,9 +54,9 @@ class Comporessor:
         self.device = device
 
     @torch.no_grad()
-    def compress(self, img: PatchedImage) -> np.ndarray:
+    def compress(self, img: PatchedImage) -> torch.tensor:
         loader = DataLoader(img, batch_size=self.batch_size, shuffle=False)
-        features = np.concatenate([self.encoder(x.to(self.device)).cpu().numpy() for x in tqdm(loader)], axis=0)
+        features = torch.concat([self.encoder(x.to(self.device)).detach() for x in tqdm(loader)], dim=0)
         features = features.squeeze()
-        features = features.reshape(img.n_y, img.n_x, features.shape[-1])  # (xy, ch) -> (y, x, ch)
-        return features.transpose(2, 0, 1)  # (y, x, ch) -> (ch, y, x)
+        features = features.view(img.n_y, img.n_x, features.shape[-1])  # (xy, ch) -> (y, x, ch)
+        return features.permute(2, 0, 1)  # (y, x, ch) -> (ch, y, x)
