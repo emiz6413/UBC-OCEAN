@@ -1772,6 +1772,17 @@ docs = ["furo", "olefile", "sphinx (>=2.4)", "sphinx-copybutton", "sphinx-inline
 tests = ["check-manifest", "coverage", "defusedxml", "markdown2", "olefile", "packaging", "pyroma", "pytest", "pytest-cov", "pytest-timeout"]
 
 [[package]]
+name = "pkgconfig"
+version = "1.5.5"
+description = "Interface Python with pkg-config"
+optional = false
+python-versions = ">=3.3,<4.0"
+files = [
+    {file = "pkgconfig-1.5.5-py3-none-any.whl", hash = "sha256:d20023bbeb42ee6d428a0fac6e0904631f545985a10cdd71a20aa58bc47a4209"},
+    {file = "pkgconfig-1.5.5.tar.gz", hash = "sha256:deb4163ef11f75b520d822d9505c1f462761b4309b1bb713d08689759ea8b899"},
+]
+
+[[package]]
 name = "platformdirs"
 version = "3.11.0"
 description = "A small Python package for determining appropriate platform-specific dirs, e.g. a \"user data dir\"."
@@ -1932,6 +1943,24 @@ files = [
 ]
 
 [[package]]
+name = "pyvips"
+version = "2.2.1"
+description = "binding for the libvips image processing library, API mode"
+optional = false
+python-versions = "*"
+files = [
+    {file = "pyvips-2.2.1.tar.gz", hash = "sha256:b51dbb45b057a282925015d540c5597560993e2986df20a778646a6b37e7cbb5"},
+]
+
+[package.dependencies]
+cffi = ">=1.0.0"
+pkgconfig = "*"
+
+[package.extras]
+doc = ["sphinx", "sphinx_rtd_theme"]
+test = ["cffi (>=1.0.0)", "pyperf", "pytest", "pytest-flake8", "pytest-runner"]
+
+[[package]]
 name = "pywin32"
 version = "306"
 description = "Python for Window Extensions"
@@ -1967,6 +1996,16 @@ files = [
     {file = "pywinpty-2.0.12-cp38-none-win_amd64.whl", hash = "sha256:189380469ca143d06e19e19ff3fba0fcefe8b4a8cc942140a6b863aed7eebb2d"},
     {file = "pywinpty-2.0.12-cp39-none-win_amd64.whl", hash = "sha256:7520575b6546db23e693cbd865db2764097bd6d4ef5dc18c92555904cd62c3d4"},
     {file = "pywinpty-2.0.12.tar.gz", hash = "sha256:8197de460ae8ebb7f5d1701dfa1b5df45b157bb832e92acba316305e18ca00dd"},
+]
+
+[[package]]
+name = "pywuffs"
+version = "1.1.1"
+description = "Python bindings for Wuffs the Library"
+optional = false
+python-versions = "*"
+files = [
+    {file = "pywuffs-1.1.1.tar.gz", hash = "sha256:0d1956485c58b62b6f6937a73bd5754f9b4eaae596a6c8cdf2f4f7930f903f04"},
 ]
 
 [[package]]
@@ -2787,4 +2826,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.11,<3.13"
-content-hash = "7e1a59aa9f658e3dd9ab434f8e57f4d40fbecb1766d91a10095c7cc739d07113"
+content-hash = "5b677b3108676ec0272363a07423b900a495237500c31b7fc4600b2130854200"
