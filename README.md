@@ -1,8 +1,8 @@
 # UBC-OCEAN
 
-This repository was developped for a kaggle competition ["UBC-OCEAN"](https://www.kaggle.com/competitions/UBC-OCEAN). The difficulty of this competition comes from the size of whole slide images (WSI) which are typically gigapixel.
+This repository was developed for a kaggle competition [UBC-OCEAN](https://www.kaggle.com/competitions/UBC-OCEAN). The difficulty of this competition comes from the size of whole slide images (WSI) which are typically gigapixel.
 
-[Tellez et al., (2020)](https://arxiv.org/abs/1811.02840) proposed neural image compression method to project WSI patches into a much smaller feature space followed by a typical CNN to classify cancer subtype given the concatenated features.
+[Tellez et al., (2020)](https://arxiv.org/abs/1811.02840) proposed neural image compression method to project WSI patches into a much smaller feature space followed by a typical CNN to classify cancer subtype given the compressed image.
 
 <img src="asset/NIC_diagram.png">
 
