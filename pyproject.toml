@@ -16,6 +16,7 @@ scipy = "^1.11.3"
 matplotlib = "^3.8.1"
 pywuffs = "^1.1.1"
 pyvips = "^2.2.1"
+pandas = "^2.1.4"
 
 
 [tool.poetry.group.dev.dependencies]
