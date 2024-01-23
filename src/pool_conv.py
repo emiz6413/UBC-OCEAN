@@ -45,15 +45,15 @@ class CNN(nn.Module):
         self,
         in_channels: int,
         num_classes: int,
+        num_stages: int = 3,
         num_pools: tuple[int, ...] = (1, 4, 16),
+        gradient_accumulation_step: int = 1,
         device: torch.device = torch.device("cuda"),
         amp: bool = True,
     ) -> None:
         super().__init__()
         self.stages = nn.Sequential(
-            CNBlock(dim=in_channels, layer_scale=1e-6, stochastic_depth_prob=0.1),
-            CNBlock(dim=in_channels, layer_scale=1e-6, stochastic_depth_prob=0.1),
-            CNBlock(dim=in_channels, layer_scale=1e-6, stochastic_depth_prob=0.1),
+            *[CNBlock(dim=in_channels, layer_scale=1e-6, stochastic_depth_prob=0.1) for _ in range(num_stages)]
         )
         self.spatial_pyramid_pool = SpatialPyramidPooling(num_pools)
         in_channels = sum(num_pools) * in_channels
@@ -63,9 +63,11 @@ class CNN(nn.Module):
         self.optimizer = self.configure_optimizer()
         self.criterion = self.configure_criterion()
         self.scaler = GradScaler(enabled=amp)
+        self.grad_accum_step = gradient_accumulation_step
         if device is None:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.device = device
+        self.to(device=device)
 
     def configure_optimizer(self) -> optim.Optimizer:
         self.optimizer = optim.Adam(self.parameters(), lr=1e-4)
@@ -83,20 +85,23 @@ class CNN(nn.Module):
         x = self.classifier(x)
         return x
 
-    def train_step(self, x: Tensor, label: Tensor) -> tuple[Tensor, Tensor]:
-        self.optimizer.zero_grad()
+    def train_step(self, x: Tensor, label: Tensor, update: bool = True) -> tuple[Tensor, Tensor]:
         with autocast(enabled=self.scaler.is_enabled()):
             pred = self.forward(x)
             loss = self.criterion(input=pred, target=label.to(pred.device))
-        self.scaler.scale(loss).backward()
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+            loss = loss / self.grad_accum_step
+            self.scaler.scale(loss).backward()
+        if update:
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            self.optimizer.zero_grad()
         return loss, pred
 
     @torch.no_grad()
     def eval_step(self, x: Tensor, label: Tensor) -> tuple[Tensor, Tensor]:
-        pred = self.forward(x)
-        loss = self.criterion(input=pred, target=label.to(pred.device))
+        with autocast(enabled=self.scaler.is_enabled()):
+            pred = self.forward(x)
+            loss = self.criterion(input=pred, target=label.to(pred.device))
         return loss, pred
 
     def train_single_epoch(self, data_loader: DataLoader) -> tuple[float, np.ndarray, np.ndarray]:
@@ -104,8 +109,9 @@ class CNN(nn.Module):
         labels = []
         loss = AverageMeter()
         pbar = tqdm(data_loader, leave=False)
-        for x, label in pbar:
-            _loss, pred = self.train_step(x, label)
+        for batch_idx, (x, label) in enumerate(pbar):
+            update = ((batch_idx + 1) % self.grad_accum_step == 0) or (batch_idx + 1 == len(data_loader))
+            _loss, pred = self.train_step(x, label, update=update)
             loss.update(_loss.item())
             preds.append(pred.detach().cpu().numpy())
             labels.append(label.numpy())
